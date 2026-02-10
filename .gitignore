@@ -1,0 +1,25 @@
+# Python virtual environment
+venv/
+
+# Claude and Codex directories
+.claude/
+.codex/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
