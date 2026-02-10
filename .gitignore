@@ -23,3 +23,8 @@ build/
 *.swp
 *.swo
 *~
+
+# Evaluation results and logs
+results/
+logs/
+missing_instances.txt
