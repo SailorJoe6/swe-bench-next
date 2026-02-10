@@ -28,11 +28,44 @@ swebench-eval-next/
 
 ## Scripts
 
-_Scripts will be documented here as they are created during implementation._
-
 | Script | Description | Phase |
 |--------|-------------|-------|
-| _(none yet)_ | | |
+| `scripts/launch-vllm.sh` | Launch/stop/status for the Qwen3-Coder-Next-FP8 vLLM server | 1 |
+| `scripts/validate-vllm.sh` | Validate vLLM server health, models, and chat completion | 1 |
+
+### `scripts/launch-vllm.sh`
+
+Wraps `spark-vllm-docker/launch-cluster.sh` with the exact vLLM configuration for SWE-bench evaluation.
+
+**Prerequisites**:
+- `vllm-node` Docker image built via `spark-vllm-docker`
+- Model weights at `~/.cache/huggingface/hub/`
+- `SPARK_VLLM_DIR` env var (defaults to `~/Code/spark-vllm-docker`)
+
+**Usage**:
+```bash
+./scripts/launch-vllm.sh              # Launch in foreground
+./scripts/launch-vllm.sh --daemon     # Launch in background (waits for server ready)
+./scripts/launch-vllm.sh --stop       # Stop the server
+./scripts/launch-vllm.sh --status     # Check container status
+./scripts/launch-vllm.sh --logs       # Tail server logs (daemon mode)
+```
+
+**Configuration**: Port 8888, `--max-num-seqs 1` (single-request constraint for DGX Spark), `--gpu-memory-utilization 0.8`, flashinfer attention backend, prefix caching enabled, fastsafetensors loading.
+
+**Note**: Uses `python3 -m vllm.entrypoints.openai.api_server` instead of `vllm serve` to work around an argparse conflict bug in vLLM 0.15.x.
+
+### `scripts/validate-vllm.sh`
+
+Runs three validation checks against the vLLM server and saves results to `results/phase1/`.
+
+**Usage**:
+```bash
+./scripts/validate-vllm.sh                    # Default: http://localhost:8888
+VLLM_PORT=9000 ./scripts/validate-vllm.sh     # Custom port
+```
+
+**Checks**: Health endpoint, model list, test chat completion. Outputs JSON responses and a summary to `results/phase1/`.
 
 ## Key References
 
