@@ -7,6 +7,28 @@ export SWE_BENCH_ROOT=~/SWE-bench
 export SWE_AGENT_ROOT=~/SWE-agent
 ```
 
+## Initial Setup
+
+**You must use the ARM64-patched forks, not the upstream repositories!**
+
+```bash
+# Clone this repository
+git clone https://github.com/SailorJoe6/swe-bench-next.git $PROJECT_ROOT
+cd $PROJECT_ROOT
+
+# Clone ARM64-patched SWE-bench fork
+git clone -b arm64-support https://github.com/SailorJoe6/SWE-bench.git $SWE_BENCH_ROOT
+
+# Clone ARM64-patched SWE-agent fork
+git clone -b arm64-support https://github.com/SailorJoe6/SWE-agent.git $SWE_AGENT_ROOT
+
+# Create virtual environment and install
+python3 -m venv venv
+source venv/bin/activate
+pip install -e $SWE_BENCH_ROOT
+pip install -e $SWE_AGENT_ROOT
+```
+
 ## TL;DR
 
 ```bash

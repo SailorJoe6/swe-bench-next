@@ -155,25 +155,44 @@ def get_instance_configs(self) -> list[BatchInstance]:
 1. ARM64 system (NVIDIA Grace, Apple M-series, AWS Graviton, etc.)
 2. Docker installed and configured
 3. Python 3.12+ environment
-4. SWE-bench repository with ARM64 patches
+4. Git for cloning repositories
 
 ### Build Process
 
-#### 1. Set Up Environment
+#### 1. Clone ARM64-Patched Repositories
+
+**Critical:** You must use the ARM64-patched forks, not the upstream repositories!
+
+```bash
+# Clone this repository
+git clone https://github.com/SailorJoe6/swe-bench-next.git $PROJECT_ROOT
+
+# Clone ARM64-patched SWE-bench (branch: arm64-support)
+git clone -b arm64-support https://github.com/SailorJoe6/SWE-bench.git $SWE_BENCH_ROOT
+
+# Clone ARM64-patched SWE-agent (branch: arm64-support)
+git clone -b arm64-support https://github.com/SailorJoe6/SWE-agent.git $SWE_AGENT_ROOT
+```
+
+#### 2. Set Up Python Environment
 
 ```bash
 cd $PROJECT_ROOT
 python3 -m venv venv
 source venv/bin/activate
+
+# Install both forks in editable mode
 pip install -e $SWE_BENCH_ROOT
+pip install -e $SWE_AGENT_ROOT
 ```
 
-#### 2. Build Base Images
+#### 3. Build Base Images
 
 Build the base images for all required languages and architectures:
 
 ```bash
 cd $SWE_BENCH_ROOT
+source $PROJECT_ROOT/venv/bin/activate
 
 # Build ARM64 base images
 python -m swebench.harness.prepare_images \
@@ -189,7 +208,7 @@ python -m swebench.harness.prepare_images \
 - Builds base Docker images for each language (Python, JavaScript, Java, Go, Rust, Ruby, PHP, C)
 - Tags images with architecture prefix (e.g., `sweb.base.js.arm64.*`)
 
-#### 3. Build Instance Images
+#### 4. Build Instance Images
 
 Build instance-specific images for all 300 test instances:
 
@@ -202,17 +221,19 @@ Build instance-specific images for all 300 test instances:
 - ARM64: `sweb.eval.arm64.apache__druid-13704:latest`
 - x86_64: `sweb.eval.x86_64.apache__druid-13704:latest`
 
-#### 4. Tag Images for SWE-agent
+#### 5. Tag Images for SWE-agent
 
 SWE-agent expects images with the Docker registry format. Tag them:
 
 ```bash
-# Example for single instance
-docker tag sweb.eval.arm64.apache__druid-13704:latest \
-    docker.io/swebench/sweb.eval.arm64.apache_1776_druid-13704:latest
+cd $PROJECT_ROOT
 
-# For all images (script will be provided)
+# Tag all ARM64 images automatically
 bash scripts/tag-arm64-images.sh
+
+# Or manually tag a single instance:
+# docker tag sweb.eval.arm64.apache__druid-13704:latest \
+#     docker.io/swebench/sweb.eval.arm64.apache_1776_druid-13704:latest
 ```
 
 ### Build Artifacts
