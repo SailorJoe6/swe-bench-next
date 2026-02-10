@@ -4,26 +4,41 @@ This directory contains documentation for the SWE-Bench Multilingual evaluation 
 
 ## Project Overview
 
-The project evaluates Qwen3-Coder-Next-FP8 on [SWE-Bench Multilingual](https://github.com/SWE-bench/SWE-bench) using three harness configurations:
+The project evaluates Qwen3-Coder-Next-FP8 on [SWE-Bench Multilingual](https://github.com/SWE-bench/SWE-bench) using the SWE-Agent harness with native ARM64 container support.
 
-1. **Default SWE-Bench harness** — direct inference pipeline (`swebench.inference.run_api`)
-2. **SWE-Agent harness** — agentic loop with tool-use scaffolding
-3. **mini-SWE-agent harness** (optional) — lightweight agent for comparison
+### Evaluation Phases
 
-All evaluations target the full SWE-Bench Multilingual test slice (~300 instances) running against a local vLLM server on a single DGX Spark.
+1. **Phase 1: vLLM Setup** ✅ — Deploy Qwen3-Coder-Next-FP8 using [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker/)
+2. **Phase 2: Default Harness** ⏭️ — Skipped (incompatible with custom vLLM endpoints)
+3. **Phase 3: SWE-Agent** ⏳ — Agentic evaluation with ARM64 containers (in progress)
+4. **Phase 4: mini-SWE-agent** 🔮 — Optional lightweight agent (pending Phase 3)
+
+All evaluations run on a single DGX Spark (ARM64/aarch64) with native ARM64 Docker images.
+
+### ARM64 Support
+
+This project includes comprehensive ARM64 support for SWE-Bench evaluation:
+- Native ARM64 Docker images (no QEMU emulation)
+- Chrome → Chromium substitution for JavaScript projects
+- Architecture-specific package downloads
+- **295/377 instances** successfully built (78% success rate)
+
+**See [arm64-support/](arm64-support/) for complete ARM64 documentation.**
 
 ## Directory Layout
 
 ```
 swebench-eval-next/
+├── config/             # SWE-agent configuration files
 ├── docs/               # This documentation directory
-├── scripts/            # Reusable scripts (server launch, reports, etc.)
-├── results/
+│   └── arm64-support/  # ARM64 implementation guide
+├── scripts/            # vLLM server scripts and utilities
+├── results/            # Evaluation outputs (gitignored)
 │   ├── phase1/         # vLLM validation outputs and logs
-│   ├── phase2/         # SWE-Bench default harness results
+│   ├── phase2/         # (skipped)
 │   ├── phase3/         # SWE-Agent harness results and JSON predictions
 │   └── phase4/         # mini-SWE-agent harness results (optional)
-└── ralph/              # AI-assisted development workflow (separate repo)
+└── ralph/              # AI-assisted development workflow (separate submodule)
 ```
 
 ## Scripts
@@ -67,14 +82,28 @@ VLLM_PORT=9000 ./scripts/validate-vllm.sh     # Custom port
 
 **Checks**: Health endpoint, model list, test chat completion. Outputs JSON responses and a summary to `results/phase1/`.
 
+## Documentation Sections
+
+- **[arm64-support/](arm64-support/)** — Complete ARM64 implementation guide
+  - [QUICKSTART.md](arm64-support/QUICKSTART.md) — Quick start guide
+  - [README.md](arm64-support/README.md) — Full implementation details
+  - [CHANGES.md](arm64-support/CHANGES.md) — Code modifications
+
 ## Key References
 
+### vLLM & Model Setup
 - [NVIDIA Forum Post — Qwen3-Coder-Next on Spark](https://forums.developer.nvidia.com/t/how-to-run-qwen3-coder-next-on-spark/359571)
-- [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker/) — custom vLLM container for DGX Spark
-- [Qwen3-Coder-Next-FP8 on HuggingFace](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8)
-- [SWE-Bench](https://github.com/SWE-bench/SWE-bench)
-- [SWE-Agent](https://github.com/SWE-agent/SWE-agent)
-- [mini-SWE-agent](https://github.com/SWE-agent/mini-SWE-agent)
+- [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker/) — Custom vLLM container for DGX Spark
+- [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8) — Model weights on HuggingFace
+
+### SWE-Bench Frameworks
+- [SWE-Bench](https://github.com/SWE-bench/SWE-bench) — Evaluation harness
+- [SWE-Agent](https://github.com/SWE-agent/SWE-agent) — Agentic framework
+- [mini-SWE-agent](https://github.com/SWE-agent/mini-SWE-agent) — Lightweight agent
+
+### ARM64-Patched Forks
+- [SWE-bench fork](https://github.com/SailorJoe6/SWE-bench) (branch: `arm64-support`) — ARM64 Docker image support
+- [SWE-agent fork](https://github.com/SailorJoe6/SWE-agent) (branch: `arm64-support`) — ARM64 architecture parameter
 
 ## Environment
 
