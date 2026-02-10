@@ -10,28 +10,29 @@
 #   - Diffs (code changes)
 #
 # Usage:
-#   ./scripts/view-traj.sh <path-to-traj-file>           # View entire trajectory
-#   ./scripts/view-traj.sh <path-to-traj-file> --tail   # Tail trajectory (follow mode)
-#   ./scripts/view-traj.sh <path-to-traj-file> --last N # Show last N steps
+#   ./scripts/view-traj.sh <path-to-traj-file>           # View last 3 steps
+#   ./scripts/view-traj.sh <path-to-traj-file> --tail   # Tail mode (updates every 2s)
+#   ./scripts/view-traj.sh <path-to-traj-file> --all    # Show entire trajectory
 #
 # Examples:
 #   ./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj
-#   ./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj --last 5
 #   ./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj --tail
 
 set -euo pipefail
 
 TRAJ_FILE="${1:-}"
-MODE="${2:-full}"
-LINES="${3:-10}"
+MODE="${2:-last}"
+
+# Number of steps to show (chosen to fit ~50-60 lines of output per step)
+SHOW_STEPS=3
 
 if [[ -z "$TRAJ_FILE" ]]; then
-    echo "Usage: $0 <traj-file> [--tail|--last N]"
+    echo "Usage: $0 <traj-file> [--tail|--all]"
     echo ""
     echo "Examples:"
     echo "  $0 results/phase3/full-run/instance-id/instance-id.traj"
     echo "  $0 results/phase3/full-run/instance-id/instance-id.traj --tail"
-    echo "  $0 results/phase3/full-run/instance-id/instance-id.traj --last 5"
+    echo "  $0 results/phase3/full-run/instance-id/instance-id.traj --all"
     exit 1
 fi
 
@@ -47,7 +48,7 @@ if [[ ! -f "$TRAJ_FILE" ]]; then
 fi
 
 # JQ filter for pretty formatting
-JQ_FILTER='
+read -r -d '' JQ_FILTER <<'EOF' || true
 # Color codes
 def red: "\u001b[31m";
 def green: "\u001b[32m";
@@ -109,20 +110,51 @@ def truncate(n): if length > n then .[:n] + "..." else . end;
   # Working directory
   gray + "📁 Working dir: " + .value.state.working_dir + reset
 )
-'
+EOF
+
+# Function to display trajectory
+display_traj() {
+    local slice_filter="$1"
+    clear
+    echo -e "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo -e "\033[1;37m📊 SWE-Agent Trajectory Viewer\033[0m"
+    echo -e "\033[0;90mFile: $TRAJ_FILE\033[0m"
+
+    # Get total steps
+    local total_steps=$(jq -r '.trajectory | length' "$TRAJ_FILE" 2>/dev/null || echo "0")
+
+    if [[ "$MODE" == "tail" ]]; then
+        echo -e "\033[0;90mMode: TAIL (updating every 2s) | Total steps: $total_steps | Showing: last $SHOW_STEPS\033[0m"
+    elif [[ "$MODE" == "all" ]]; then
+        echo -e "\033[0;90mMode: FULL | Total steps: $total_steps\033[0m"
+    else
+        echo -e "\033[0;90mMode: LAST | Total steps: $total_steps | Showing: last $SHOW_STEPS\033[0m"
+    fi
+
+    echo -e "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+
+    # Build the full JQ program
+    local full_filter="$slice_filter | {trajectory: .} | $JQ_FILTER"
+    jq -r "$full_filter" "$TRAJ_FILE" 2>/dev/null || echo -e "\n\033[0;31mError: Could not parse trajectory file\033[0m\n"
+}
 
 # Execute based on mode
 case "$MODE" in
     --tail)
-        echo "📡 Tailing trajectory file (Ctrl+C to stop)..."
-        echo "File: $TRAJ_FILE"
-        tail -f "$TRAJ_FILE" | jq -r --unbuffered "$JQ_FILTER"
+        MODE="tail"
+        echo "🔄 Starting tail mode (Ctrl+C to stop)..."
+        sleep 1
+        while true; do
+            display_traj ".trajectory | .[-${SHOW_STEPS}:]"
+            sleep 2
+        done
         ;;
-    --last)
-        LAST_N="${LINES:-10}"
-        jq -r ".trajectory | .[-${LAST_N}:] | {trajectory: .} | $JQ_FILTER" "$TRAJ_FILE"
+    --all)
+        MODE="all"
+        display_traj "."
         ;;
     *)
-        jq -r "$JQ_FILTER" "$TRAJ_FILE"
+        MODE="last"
+        display_traj ".trajectory | .[-${SHOW_STEPS}:]"
         ;;
 esac
