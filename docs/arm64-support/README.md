@@ -302,14 +302,14 @@ source venv/bin/activate
 sweagent run-batch \
   --config config/qwen3-vllm.yaml \
   --instances.slice :1 \
-  --output_dir results/test-single
+  --output_dir results/phase3/test-single
 ```
 
 **Expected output:**
 - Container starts with ARM64 image
 - Standalone Python gets installed
 - Agent executes and generates trajectory
-- Patch is saved to `results/test-single/preds.json`
+- Patch is saved to `results/phase3/test-single/preds.json`
 
 ### Running Full Evaluation
 
@@ -318,7 +318,7 @@ Run on all 300 instances:
 ```bash
 sweagent run-batch \
   --config config/qwen3-vllm.yaml \
-  --output_dir results/full-run
+  --output_dir results/phase3/full-run
 ```
 
 **Optional parameters:**
@@ -331,7 +331,7 @@ sweagent run-batch \
 For each instance, SWE-agent generates:
 
 ```
-results/full-run/
+results/phase3/full-run/           # Phase 3 = SWE-Agent evaluation
 ├── instance_id/
 │   ├── instance_id.config.yaml     # Instance configuration
 │   ├── instance_id.traj            # Full trajectory (all model interactions)

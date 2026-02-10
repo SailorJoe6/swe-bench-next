@@ -48,7 +48,7 @@ bash scripts/tag-arm64-images.sh
 # 3. Run evaluation
 sweagent run-batch \
   --config config/qwen3-vllm.yaml \
-  --output_dir results/my-run
+  --output_dir results/phase3/my-run  # Use results/phase3/ for SWE-Agent runs
 ```
 
 ## Prerequisites Checklist
@@ -133,14 +133,14 @@ docker images | grep "sweb.eval.arm64" | wc -l  # Should be ~300
 ### Monitor Evaluation
 
 ```bash
-# Watch log file
-tail -f results/my-run/run_batch.log
+# Watch log file (using Phase 3 output directory)
+tail -f results/phase3/my-run/run_batch.log
 
 # Check progress
-watch -n 5 'ls -1 results/my-run/*/instance_id.traj | wc -l'
+watch -n 5 'ls -1 results/phase3/my-run/*/instance_id.traj | wc -l'
 
 # View trajectory
-tail -100 results/my-run/instance-name/instance-name.traj
+tail -100 results/phase3/my-run/instance-name/instance-name.traj
 ```
 
 ### Clean Up
@@ -222,7 +222,7 @@ Build Logs:
 ### During Evaluation
 
 ```
-results/my-run/
+results/phase3/my-run/          # Phase 3 = SWE-Agent evaluation
 ├── instance-1/
 │   ├── instance-1.traj          # Full agent trajectory (~5-10 MB)
 │   ├── instance-1.debug.log     # Debug logs
