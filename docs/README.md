@@ -47,6 +47,8 @@ swebench-eval-next/
 |--------|-------------|-------|
 | `scripts/launch-vllm.sh` | Launch/stop/status for the Qwen3-Coder-Next-FP8 vLLM server | 1 |
 | `scripts/validate-vllm.sh` | Validate vLLM server health, models, and chat completion | 1 |
+| `scripts/view-traj.sh` | View SWE-agent trajectory files with formatted, colorized output | 3 |
+| `scripts/tag-arm64-images.sh` | Tag ARM64 images for SWE-agent compatibility | 3 |
 
 ### `scripts/launch-vllm.sh`
 
@@ -81,6 +83,42 @@ VLLM_PORT=9000 ./scripts/validate-vllm.sh     # Custom port
 ```
 
 **Checks**: Health endpoint, model list, test chat completion. Outputs JSON responses and a summary to `results/phase1/`.
+
+### `scripts/view-traj.sh`
+
+View SWE-agent trajectory files with formatted, colorized output. Trajectories contain the full agent execution history.
+
+**Usage**:
+```bash
+./scripts/view-traj.sh <traj-file>              # View entire trajectory
+./scripts/view-traj.sh <traj-file> --tail      # Follow mode (live updates)
+./scripts/view-traj.sh <traj-file> --last N    # Show last N steps
+```
+
+**Examples**:
+```bash
+# View full trajectory
+./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj
+
+# Monitor running evaluation (follow mode)
+./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj --tail
+
+# Show last 5 steps
+./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj --last 5
+```
+
+**Output**: Each step shows step number, execution time, action, thought, response, observation (truncated), and diff (truncated). Color-coded for readability.
+
+### `scripts/tag-arm64-images.sh`
+
+Tags all ARM64 SWE-bench images for SWE-agent compatibility (converts naming convention).
+
+**Usage**:
+```bash
+./scripts/tag-arm64-images.sh                  # Tag all images, show progress
+```
+
+**What it does**: Converts `sweb.eval.arm64.repo__instance:latest` to `docker.io/swebench/sweb.eval.arm64.repo_1776_instance:latest`.
 
 ## Documentation Sections
 
