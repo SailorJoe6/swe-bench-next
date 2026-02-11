@@ -124,6 +124,38 @@ RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key
     )
 ```
 
+### File: `swebench/harness/log_parsers/java.py`
+
+**Purpose:** Fix Gradle log parser false negative when JVM WARNING messages are concatenated directly after PASSED/FAILED.
+
+**Problem:** The regex `r"^([^>].+)\s+(PASSED|FAILED)$"` required PASSED/FAILED at end-of-line. On ARM64, JVM security warnings like `WARNING: A command line option has enabled the Security Manager` are sometimes concatenated directly after `PASSED` with no separator (e.g., `testBoostsSimple PASSEDWARNING: ...`), causing false negatives.
+
+**Changes:**
+
+1. **`parse_log_gradle_custom()` function** (line 98):
+
+```python
+# BEFORE:
+full_pattern = r"^([^>].+)\s+(PASSED|FAILED)$"
+
+# AFTER:
+full_pattern = r"^([^>].+?)\s+(PASSED|FAILED)"
+```
+
+- Changed greedy `.+` to non-greedy `.+?` for test name capture
+- Removed `$` end-of-line anchor to handle concatenated JVM output
+
+**Commit:** `fa7b960` on SWE-bench fork (branch: arm64-support)
+
+### File: `tests/test_log_parsers_java.py`
+
+**Purpose:** Add test coverage for JVM WARNING concatenation edge case.
+
+**Changes:**
+
+- Added `test_jvm_warning_concatenated_after_status()` — tests with actual pattern from `apache__lucene-12196`
+- Added `test_jvm_warning_concatenated_after_failed()` — tests FAILED with concatenated WARNING
+
 ## SWE-agent Repository Changes
 
 ### File: `sweagent/run/batch_instances.py`
@@ -307,12 +339,14 @@ agent:
 
 ## Summary of Changes
 
-### SWE-bench (2 files modified)
+### SWE-bench (4 files modified)
 
 | File | Lines Changed | Purpose |
 |------|---------------|---------|
 | `dockerfiles/javascript.py` | ~10 | Add placeholders for chrome_install and pnpm_arch |
 | `dockerfiles/__init__.py` | ~70 | Implement architecture-aware Chrome/Chromium and pnpm logic |
+| `harness/log_parsers/java.py` | ~3 | Fix Gradle parser false negative with concatenated JVM output |
+| `tests/test_log_parsers_java.py` | ~27 | Test coverage for JVM WARNING concatenation edge case |
 
 ### SWE-agent (1 file modified)
 
@@ -322,8 +356,8 @@ agent:
 
 ### Total Impact
 
-- **3 files modified** across 2 repositories
-- **~95 lines of code** added/changed
+- **4 files modified** across 2 repositories (+ 1 test file)
+- **~125 lines of code** added/changed
 - **Zero breaking changes** - defaults to x86_64 for backward compatibility
 - **Fully parameterized** - architecture is controlled via config/CLI
 
