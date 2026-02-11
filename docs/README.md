@@ -2,6 +2,18 @@
 
 This directory contains documentation for the SWE-Bench Multilingual evaluation project using Qwen3-Coder-Next-FP8 on DGX Spark.
 
+## Documentation Navigation
+
+**New to this project?** Start with the [Quick Start Guide](QUICKSTART.md) for a step-by-step setup and evaluation walkthrough.
+
+### Full Documentation
+- **[QUICKSTART.md](QUICKSTART.md)** — Quick start guide for setting up and running evaluations
+- **[arm64-support/](arm64-support/)** — Complete ARM64 implementation guide
+  - [arm64-support/QUICKSTART.md](arm64-support/QUICKSTART.md) — ARM64 quick start
+  - [arm64-support/README.md](arm64-support/README.md) — Full ARM64 implementation details
+  - [arm64-support/CHANGES.md](arm64-support/CHANGES.md) — ARM64 code modifications
+  - [arm64-support/mvnd-fix.md](arm64-support/mvnd-fix.md) — mvnd ARM64 binary fix and rebuild guide
+
 ## Project Overview
 
 The project evaluates Qwen3-Coder-Next-FP8 on [SWE-Bench Multilingual](https://github.com/SWE-bench/SWE-bench) using the SWE-Agent harness with native ARM64 container support.
@@ -50,6 +62,7 @@ swebench-eval-next/
 | `scripts/view-traj.sh` | View SWE-agent trajectory files with formatted, colorized output | 3 |
 | `scripts/tag-arm64-images.sh` | Tag ARM64 images for SWE-agent compatibility | 3 |
 | `scripts/check-eval-progress.sh` | Monitor SWE-agent evaluation progress with detailed statistics | 3 |
+| `scripts/run_test_eval.sh` | Run test evaluations on predictions | 3 |
 
 ### `scripts/launch-vllm.sh`
 
@@ -141,13 +154,6 @@ Monitor SWE-agent evaluation progress with comprehensive statistics and timing e
 ```
 
 **Output**: Shows evaluation status (running/stopped), progress percentage, success/error counts, currently processing instance, timing statistics (elapsed time, average time per instance, estimated completion time), and recent log activity.
-
-## Documentation Sections
-
-- **[arm64-support/](arm64-support/)** — Complete ARM64 implementation guide
-  - [QUICKSTART.md](arm64-support/QUICKSTART.md) — Quick start guide
-  - [README.md](arm64-support/README.md) — Full implementation details
-  - [CHANGES.md](arm64-support/CHANGES.md) — Code modifications
 
 ## Key References
 

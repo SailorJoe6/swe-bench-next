@@ -44,11 +44,6 @@ python -m swebench.harness.prepare_images \
 # 2. Tag images for SWE-agent (one time)
 cd $PROJECT_ROOT
 bash scripts/tag-arm64-images.sh
-
-# 3. Run evaluation
-sweagent run-batch \
-  --config config/qwen3-vllm.yaml \
-  --output_dir results/phase3/my-run  # Use results/phase3/ for SWE-Agent runs
 ```
 
 ## Prerequisites Checklist
