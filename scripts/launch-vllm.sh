@@ -32,7 +32,7 @@ fi
 VLLM_ARGS="python3 -m vllm.entrypoints.openai.api_server \
     --model Qwen/Qwen3-Coder-Next-FP8 \
     --enable-auto-tool-choice \
-    --tool-call-parser qwen3_coder \
+    --tool-call-parser qwen3_xml \
     --gpu-memory-utilization 0.8 \
     --host 0.0.0.0 --port 8888 \
     --load-format fastsafetensors \
