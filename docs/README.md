@@ -49,6 +49,7 @@ swebench-eval-next/
 | `scripts/validate-vllm.sh` | Validate vLLM server health, models, and chat completion | 1 |
 | `scripts/view-traj.sh` | View SWE-agent trajectory files with formatted, colorized output | 3 |
 | `scripts/tag-arm64-images.sh` | Tag ARM64 images for SWE-agent compatibility | 3 |
+| `scripts/check-eval-progress.sh` | Monitor SWE-agent evaluation progress with detailed statistics | 3 |
 
 ### `scripts/launch-vllm.sh`
 
@@ -119,6 +120,27 @@ Tags all ARM64 SWE-bench images for SWE-agent compatibility (converts naming con
 ```
 
 **What it does**: Converts `sweb.eval.arm64.repo__instance:latest` to `docker.io/swebench/sweb.eval.arm64.repo_1776_instance:latest`.
+
+### `scripts/check-eval-progress.sh`
+
+Monitor SWE-agent evaluation progress with comprehensive statistics and timing estimates.
+
+**Usage**:
+```bash
+./scripts/check-eval-progress.sh                      # Monitor default location
+./scripts/check-eval-progress.sh <eval-dir>           # Monitor custom directory
+```
+
+**Examples**:
+```bash
+# Check default evaluation progress
+./scripts/check-eval-progress.sh
+
+# Check specific evaluation run
+./scripts/check-eval-progress.sh results/phase3/full-run
+```
+
+**Output**: Shows evaluation status (running/stopped), progress percentage, success/error counts, currently processing instance, timing statistics (elapsed time, average time per instance, estimated completion time), and recent log activity.
 
 ## Documentation Sections
 
