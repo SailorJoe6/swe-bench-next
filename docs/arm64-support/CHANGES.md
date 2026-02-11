@@ -156,6 +156,66 @@ full_pattern = r"^([^>].+?)\s+(PASSED|FAILED)"
 - Added `test_jvm_warning_concatenated_after_status()` — tests with actual pattern from `apache__lucene-12196`
 - Added `test_jvm_warning_concatenated_after_failed()` — tests FAILED with concatenated WARNING
 
+### File: `swebench/harness/dockerfiles/java.py`
+
+**Purpose:** Replace hardcoded x86_64 mvnd binary download with architecture-aware installation.
+
+**Problem:** Apache Maven Daemon (mvnd) has no Linux ARM64 releases. The Java Dockerfile template in SWE-bench hardcoded a `linux-amd64` mvnd download URL, causing all Druid and Gson containers to fail with "cannot execute binary file: Exec format error" when run on ARM64.
+
+**Changes:**
+
+1. **Replaced hardcoded mvnd download with `{mvnd_install}` template placeholder:**
+
+```python
+# BEFORE:
+RUN wget https://...mvnd-...-linux-amd64.zip ...
+
+# AFTER:
+{mvnd_install}
+```
+
+2. **Added architecture-specific install blocks:**
+
+```python
+_MVND_INSTALL_AMD64 = """..."""   # Downloads native linux-amd64 binary
+_MVND_INSTALL_ARM64 = """..."""   # Creates mvnd → mvn symlink (mvn is pure Java, already in base image)
+```
+
+**Commit:** `e6e3f93` on SWE-bench fork (branch: arm64-support)
+
+### File: `swebench/harness/dockerfiles/__init__.py` (mvnd additions)
+
+**Purpose:** Wire up architecture-aware mvnd install block selection.
+
+**Changes:**
+
+1. **`get_dockerfile_base()` function** — added mvnd install block selection for Java language based on `arch` parameter, following the same pattern used for JavaScript Chrome/Chromium:
+
+```python
+if language == "java":
+    if arch == "arm64":
+        kwargs["mvnd_install"] = _MVND_INSTALL_ARM64
+    else:
+        kwargs["mvnd_install"] = _MVND_INSTALL_AMD64
+```
+
+2. **`get_dockerfile_env()` function** — added the same mvnd install block selection for the env Dockerfile path.
+
+### File: `tests/test_dockerfiles_java.py` (new file)
+
+**Purpose:** Test coverage for Java mvnd ARM64 fix.
+
+**Changes:**
+
+- 14 tests covering:
+  - ARM64 symlink fallback (`mvnd` -> `mvn`)
+  - x86_64 native binary download
+  - Environment variable handling
+  - Env Dockerfile fallback path
+  - Non-Java language isolation (ensures mvnd logic does not affect other languages)
+
+**Affected instances:** 5 Druid + 9 Gson = 14 instances (JavaParser uses `./mvnw` and is unaffected).
+
 ## SWE-agent Repository Changes
 
 ### File: `sweagent/run/batch_instances.py`
@@ -339,14 +399,16 @@ agent:
 
 ## Summary of Changes
 
-### SWE-bench (4 files modified)
+### SWE-bench (6 files modified)
 
 | File | Lines Changed | Purpose |
 |------|---------------|---------|
 | `dockerfiles/javascript.py` | ~10 | Add placeholders for chrome_install and pnpm_arch |
-| `dockerfiles/__init__.py` | ~70 | Implement architecture-aware Chrome/Chromium and pnpm logic |
+| `dockerfiles/java.py` | ~15 | Replace hardcoded mvnd download with architecture-aware `{mvnd_install}` placeholder |
+| `dockerfiles/__init__.py` | ~85 | Implement architecture-aware Chrome/Chromium, pnpm, and mvnd logic |
 | `harness/log_parsers/java.py` | ~3 | Fix Gradle parser false negative with concatenated JVM output |
 | `tests/test_log_parsers_java.py` | ~27 | Test coverage for JVM WARNING concatenation edge case |
+| `tests/test_dockerfiles_java.py` | ~120 | 14 tests for Java mvnd ARM64 symlink/binary selection |
 
 ### SWE-agent (1 file modified)
 
@@ -356,8 +418,8 @@ agent:
 
 ### Total Impact
 
-- **4 files modified** across 2 repositories (+ 1 test file)
-- **~125 lines of code** added/changed
+- **6 files modified** across 2 repositories (+ 2 test files)
+- **~260 lines of code** added/changed
 - **Zero breaking changes** - defaults to x86_64 for backward compatibility
 - **Fully parameterized** - architecture is controlled via config/CLI
 
