@@ -7,7 +7,6 @@
 #   - Thoughts (agent reasoning)
 #   - Responses (agent messages)
 #   - Observations (command outputs)
-#   - Diffs (code changes)
 #
 # Usage:
 #   ./scripts/view-traj.sh <path-to-traj-file>           # View entire trajectory
@@ -124,15 +123,6 @@ def truncate(n): if length > n then .[:n] + "..." else . end;
     yellow + bold + "👁️  OBSERVATION:" + reset +
     gray + " (truncated to 500 chars)" + reset + "\n" +
     (.observation | truncate(500) | split("\n") | map("   " + .) | join("\n")) + "\n\n"
-  else "" end) +
-
-  # State changes
-  (if .state.diff != "" then
-    red + bold + "📝 DIFF:" + reset + "\n" +
-    (.state.diff | split("\n") | .[0:20] | map("   " + .) | join("\n")) +
-    (if (.state.diff | split("\n") | length) > 20 then
-      "\n   " + gray + "... (diff truncated)" + reset
-    else "" end) + "\n\n"
   else "" end) +
 
   # Working directory
