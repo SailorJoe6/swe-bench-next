@@ -397,16 +397,59 @@ agent:
     total_cost_limit: 100.0
 ```
 
+### File: `swebench/harness/constants/java.py` (Maven resource bundle fix)
+
+**Purpose:** Fix Maven resource bundle SNAPSHOT resolution failure on fresh ARM64 Docker images.
+
+**Problem:** Apache Druid's root `pom.xml` references `org.apache.apache.resources:apache-jar-resource-bundle:1.5-SNAPSHOT`. Original x86_64 Docker images had this artifact cached locally from prior builds, but fresh ARM64 rebuilds don't have it cached. The SNAPSHOT version cannot be resolved from public Maven repositories, causing `mvn clean install` to fail during both the Docker image build and evaluation.
+
+**Changes:**
+
+Added `sed` install command to all 5 Druid instance specs to replace `1.5-SNAPSHOT` with the released `1.5` version:
+
+```python
+SPECS_DRUID = {
+    "15402": {
+        "docker_specs": {"java_version": "11"},
+        "install": [
+            # Fix Maven resource bundle SNAPSHOT reference that fails on fresh ARM64 images
+            r"sed -i 's/<resourceBundle>org.apache.apache.resources:apache-jar-resource-bundle:1.5-SNAPSHOT<\/resourceBundle>/<resourceBundle>org.apache.apache.resources:apache-jar-resource-bundle:1.5<\/resourceBundle>/' pom.xml",
+            "mvn clean install -B -pl processing -DskipTests -am",
+        ],
+    },
+    # Same sed fix applied to instances: 14092, 14136, 13704, 16875
+}
+```
+
+**Commit:** `b97b4a3` on SWE-bench fork (branch: arm64-support)
+
+**Affected instances:** All 5 Druid instances (13704, 14092, 14136, 15402, 16875)
+
+### File: `tests/test_constants_java.py` (new file)
+
+**Purpose:** Test coverage for Maven resource bundle fix across all Druid instances.
+
+**Changes:**
+
+- 6 tests verifying:
+  - All 5 Druid instances have the sed fix in their install step
+  - The fix replaces SNAPSHOT with release version
+  - The fix targets pom.xml
+  - The sed command runs before `mvn clean install`
+  - Lucene instances (which use Gradle) are unaffected
+
 ## Summary of Changes
 
-### SWE-bench (6 files modified)
+### SWE-bench (8 files modified)
 
 | File | Lines Changed | Purpose |
 |------|---------------|---------|
 | `dockerfiles/javascript.py` | ~10 | Add placeholders for chrome_install and pnpm_arch |
 | `dockerfiles/java.py` | ~15 | Replace hardcoded mvnd download with architecture-aware `{mvnd_install}` placeholder |
 | `dockerfiles/__init__.py` | ~85 | Implement architecture-aware Chrome/Chromium, pnpm, and mvnd logic |
+| `harness/constants/java.py` | ~10 | Fix Maven resource bundle SNAPSHOT in all 5 Druid instance specs |
 | `harness/log_parsers/java.py` | ~3 | Fix Gradle parser false negative with concatenated JVM output |
+| `tests/test_constants_java.py` | ~70 | 6 tests for Druid Maven resource bundle fix |
 | `tests/test_log_parsers_java.py` | ~27 | Test coverage for JVM WARNING concatenation edge case |
 | `tests/test_dockerfiles_java.py` | ~120 | 14 tests for Java mvnd ARM64 symlink/binary selection |
 
@@ -418,8 +461,8 @@ agent:
 
 ### Total Impact
 
-- **6 files modified** across 2 repositories (+ 2 test files)
-- **~260 lines of code** added/changed
+- **8 files modified** across 2 repositories (+ 3 test files)
+- **~340 lines of code** added/changed
 - **Zero breaking changes** - defaults to x86_64 for backward compatibility
 - **Fully parameterized** - architecture is controlled via config/CLI
 
