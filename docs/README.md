@@ -1,179 +1,42 @@
-# SWE-Bench Evaluation — Documentation Index
+# Documentation Index
 
-This directory contains documentation for the SWE-Bench Multilingual evaluation project using Qwen3-Coder-Next-FP8 on DGX Spark.
+Welcome to the SWE-Bench Evaluation project documentation. This index provides quick access to all documentation.
 
-## Documentation Navigation
+## Getting Started
 
-**New to this project?** Start with the [Quick Start Guide](QUICKSTART.md) for a step-by-step setup and evaluation walkthrough.
+- **[Quick Start](guides/quickstart.md)** - Step-by-step guide to set up and run evaluations
 
-### Full Documentation
-- **[QUICKSTART.md](QUICKSTART.md)** — Quick start guide for setting up and running evaluations
-- **[arm64-support/](arm64-support/)** — Complete ARM64 implementation guide
-  - [arm64-support/QUICKSTART.md](arm64-support/QUICKSTART.md) — ARM64 quick start
-  - [arm64-support/README.md](arm64-support/README.md) — Full ARM64 implementation details
-  - [arm64-support/CHANGES.md](arm64-support/CHANGES.md) — ARM64 code modifications
-  - [arm64-support/mvnd-fix.md](arm64-support/mvnd-fix.md) — mvnd ARM64 binary fix and rebuild guide
+## Implementation Details
 
-## Project Overview
+- **[Overview](implementation/README.md)** - Project architecture, phases, and scripts
+- **[ARM64 Support](arm64-support/README.md)** - Complete ARM64 implementation guide
+- **[ARM64 Quick Start](arm64-support/QUICKSTART.md)** - Quick start for ARM64 evaluations
+- **[Code Changes](arm64-support/CHANGES.md)** - Detailed code modifications for ARM64
+- **[mvnd Fix](arm64-support/mvnd-fix.md)** - Apache Maven ARM64 binary workaround
 
-The project evaluates Qwen3-Coder-Next-FP8 on [SWE-Bench Multilingual](https://github.com/SWE-bench/SWE-bench) using the SWE-Agent harness with native ARM64 container support.
-
-### Evaluation Phases
-
-1. **Phase 1: vLLM Setup** ✅ — Deploy Qwen3-Coder-Next-FP8 using [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker/)
-2. **Phase 2: Default Harness** ⏭️ — Skipped (incompatible with custom vLLM endpoints)
-3. **Phase 3: SWE-Agent** ⏳ — Agentic evaluation with ARM64 containers (in progress)
-4. **Phase 4: mini-SWE-agent** 🔮 — Optional lightweight agent (pending Phase 3)
-
-All evaluations run on a single DGX Spark (ARM64/aarch64) with native ARM64 Docker images.
-
-### ARM64 Support
-
-This project includes comprehensive ARM64 support for SWE-Bench evaluation:
-- Native ARM64 Docker images (no QEMU emulation)
-- Chrome → Chromium substitution for JavaScript projects
-- Architecture-specific package downloads
-- **295/377 instances** successfully built (78% success rate)
-
-**See [arm64-support/](arm64-support/) for complete ARM64 documentation.**
-
-## Directory Layout
+## Project Structure
 
 ```
-swebench-eval-next/
-├── config/             # SWE-agent configuration files
-├── docs/               # This documentation directory
-│   └── arm64-support/  # ARM64 implementation guide
-├── scripts/            # vLLM server scripts and utilities
-├── results/            # Evaluation outputs (gitignored)
-│   ├── phase1/         # vLLM validation outputs and logs
-│   ├── phase2/         # (skipped)
-│   ├── phase3/         # SWE-Agent harness results and JSON predictions
-│   └── phase4/         # mini-SWE-agent harness results (optional)
-└── ralph/              # AI-assisted development workflow (separate submodule)
+docs/
+├── README.md              # This file - documentation index
+├── guides/                # User guides and tutorials
+│   └── quickstart.md      # Quick start guide
+├── implementation/        # Technical implementation docs
+│   └── README.md          # Project overview and scripts
+└── arm64-support/         # ARM64-specific documentation
+    ├── README.md          # Full ARM64 implementation guide
+    ├── QUICKSTART.md      # ARM64 quick start
+    ├── CHANGES.md         # Code changes summary
+    └── mvnd-fix.md        # Maven ARM64 workaround
 ```
 
-## Scripts
+## Quick Links
 
-| Script | Description | Phase |
-|--------|-------------|-------|
-| `scripts/launch-vllm.sh` | Launch/stop/status for the Qwen3-Coder-Next-FP8 vLLM server | 1 |
-| `scripts/validate-vllm.sh` | Validate vLLM server health, models, and chat completion | 1 |
-| `scripts/view-traj.sh` | View SWE-agent trajectory files with formatted, colorized output | 3 |
-| `scripts/tag-arm64-images.sh` | Tag ARM64 images for SWE-agent compatibility | 3 |
-| `scripts/check-eval-progress.sh` | Monitor SWE-agent evaluation progress with detailed statistics | 3 |
-| `scripts/run_test_eval.sh` | Run test evaluations on predictions | 3 |
+### For New Users
+Start with the **[Quick Start](guides/quickstart.md)** guide.
 
-### `scripts/launch-vllm.sh`
+### For ARM64 Users
+See **[ARM64 Quick Start](arm64-support/QUICKSTART.md)** for ARM64-specific setup.
 
-Wraps `spark-vllm-docker/launch-cluster.sh` with the exact vLLM configuration for SWE-bench evaluation.
-
-**Prerequisites**:
-- `vllm-node` Docker image built via `spark-vllm-docker`
-- Model weights at `~/.cache/huggingface/hub/`
-- `SPARK_VLLM_DIR` env var (defaults to `~/Code/spark-vllm-docker`)
-
-**Usage**:
-```bash
-./scripts/launch-vllm.sh              # Launch in foreground
-./scripts/launch-vllm.sh --daemon     # Launch in background (waits for server ready)
-./scripts/launch-vllm.sh --stop       # Stop the server
-./scripts/launch-vllm.sh --status     # Check container status
-./scripts/launch-vllm.sh --logs       # Tail server logs (daemon mode)
-```
-
-**Configuration**: Port 8888, `--max-num-seqs 1` (single-request constraint for DGX Spark), `--gpu-memory-utilization 0.8`, flashinfer attention backend, prefix caching enabled, fastsafetensors loading.
-
-**Note**: Uses `python3 -m vllm.entrypoints.openai.api_server` instead of `vllm serve` to work around an argparse conflict bug in vLLM 0.15.x.
-
-### `scripts/validate-vllm.sh`
-
-Runs three validation checks against the vLLM server and saves results to `results/phase1/`.
-
-**Usage**:
-```bash
-./scripts/validate-vllm.sh                    # Default: http://localhost:8888
-VLLM_PORT=9000 ./scripts/validate-vllm.sh     # Custom port
-```
-
-**Checks**: Health endpoint, model list, test chat completion. Outputs JSON responses and a summary to `results/phase1/`.
-
-### `scripts/view-traj.sh`
-
-View SWE-agent trajectory files with formatted, colorized output. Trajectories contain the full agent execution history.
-
-**Usage**:
-```bash
-./scripts/view-traj.sh <traj-file>              # View entire trajectory
-./scripts/view-traj.sh <traj-file> --tail      # Follow mode (live updates)
-./scripts/view-traj.sh <traj-file> --last N    # Show last N steps
-```
-
-**Examples**:
-```bash
-# View full trajectory
-./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj
-
-# Monitor running evaluation (follow mode)
-./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj --tail
-
-# Show last 5 steps
-./scripts/view-traj.sh results/phase3/full-run/apache__druid-13704/apache__druid-13704.traj --last 5
-```
-
-**Output**: Each step shows step number, execution time, action, thought, response, observation (truncated), and diff (truncated). Color-coded for readability.
-
-### `scripts/tag-arm64-images.sh`
-
-Tags all ARM64 SWE-bench images for SWE-agent compatibility (converts naming convention).
-
-**Usage**:
-```bash
-./scripts/tag-arm64-images.sh                  # Tag all images, show progress
-```
-
-**What it does**: Converts `sweb.eval.arm64.repo__instance:latest` to `docker.io/swebench/sweb.eval.arm64.repo_1776_instance:latest`.
-
-### `scripts/check-eval-progress.sh`
-
-Monitor SWE-agent evaluation progress with comprehensive statistics and timing estimates.
-
-**Usage**:
-```bash
-./scripts/check-eval-progress.sh                      # Monitor default location
-./scripts/check-eval-progress.sh <eval-dir>           # Monitor custom directory
-```
-
-**Examples**:
-```bash
-# Check default evaluation progress
-./scripts/check-eval-progress.sh
-
-# Check specific evaluation run
-./scripts/check-eval-progress.sh results/phase3/full-run
-```
-
-**Output**: Shows evaluation status (running/stopped), progress percentage, success/error counts, currently processing instance, timing statistics (elapsed time, average time per instance, estimated completion time), and recent log activity.
-
-## Key References
-
-### vLLM & Model Setup
-- [NVIDIA Forum Post — Qwen3-Coder-Next on Spark](https://forums.developer.nvidia.com/t/how-to-run-qwen3-coder-next-on-spark/359571)
-- [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker/) — Custom vLLM container for DGX Spark
-- [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8) — Model weights on HuggingFace
-
-### SWE-Bench Frameworks
-- [SWE-Bench](https://github.com/SWE-bench/SWE-bench) — Evaluation harness
-- [SWE-Agent](https://github.com/SWE-agent/SWE-agent) — Agentic framework
-- [mini-SWE-agent](https://github.com/SWE-agent/mini-SWE-agent) — Lightweight agent
-
-### ARM64-Patched Forks
-- [SWE-bench fork](https://github.com/SailorJoe6/SWE-bench) (branch: `arm64-support`) — ARM64 Docker image support
-- [SWE-agent fork](https://github.com/SailorJoe6/SWE-agent) (branch: `arm64-support`) — ARM64 architecture parameter
-
-## Environment
-
-- **Hardware**: DGX Spark, NVIDIA GB10, 119GB RAM, 20 CPUs
-- **Container Runtime**: Docker
-- **Model**: Qwen3-Coder-Next-FP8 (80B params, FP8 quantization)
-- **Serving**: vLLM via spark-vllm-docker (`--max-num-seqs 1` for single-request constraint)
+### For Developers
+Review **[Code Changes](arm64-support/CHANGES.md)** to understand modifications to SWE-bench and SWE-agent.

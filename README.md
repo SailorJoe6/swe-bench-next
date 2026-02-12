@@ -16,6 +16,8 @@ See **[docs/](docs/)** for complete documentation including:
 ```
 ├── config/              # SWE-agent configurations
 ├── docs/                # Complete documentation
+│   ├── guides/          # User guides (e.g., quickstart)
+│   ├── implementation/  # Technical implementation docs
 │   └── arm64-support/   # ARM64 implementation guide
 ├── scripts/             # vLLM server scripts and utilities
 └── results/             # Evaluation outputs (gitignored)
@@ -32,4 +34,4 @@ This project includes patches for running SWE-Bench on ARM64 (aarch64) systems. 
 
 **Required forks** (with ARM64 patches):
 - [SWE-bench fork](https://github.com/SailorJoe6/SWE-bench) (branch: `arm64-support`)
-- [SWE-agent fork](https://github.com/SailorJoe6/SWE-agent) (branch: `arm64-support`)  
+- [SWE-agent fork](https://github.com/SailorJoe6/SWE-agent) (branch: `arm64-support`)
