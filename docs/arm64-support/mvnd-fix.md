@@ -112,8 +112,33 @@ python -m swebench.harness.prepare_images \
 ./scripts/tag-arm64-images.sh
 ```
 
+## Related Fix: Maven Resource Bundle SNAPSHOT
+
+A separate issue also affects all 5 Druid instances on ARM64. Apache Druid's root `pom.xml` references `org.apache.apache.resources:apache-jar-resource-bundle:1.5-SNAPSHOT`. Original x86_64 Docker images had this artifact cached locally, but fresh ARM64 rebuilds don't.
+
+**Error:**
+```
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-remote-resources-plugin:1.5:process
+Resources archive cannot be found.: The following artifacts could not be resolved:
+org.apache.apache.resources:apache-jar-resource-bundle:jar:1.5-SNAPSHOT
+```
+
+**Fix:** Added `sed` install command to all 5 Druid specs in `swebench/harness/constants/java.py` (commit `b97b4a3`):
+
+```python
+"install": [
+    r"sed -i 's/<resourceBundle>org.apache.apache.resources:apache-jar-resource-bundle:1.5-SNAPSHOT<\/resourceBundle>/<resourceBundle>org.apache.apache.resources:apache-jar-resource-bundle:1.5<\/resourceBundle>/' pom.xml",
+    "mvn clean install -B -pl processing -DskipTests -am",
+],
+```
+
+This runs during Docker image build, replacing the SNAPSHOT reference with the released `1.5` version before `mvn clean install`.
+
+**Note:** This fix only affects Druid instances. Lucene (which uses Gradle, not Maven) is unaffected.
+
 ## Unaffected Instances
 
+- **Lucene instances** - use Gradle, not Maven; no `pom.xml` at repo root
 - **JavaScript instances** - use Chrome/Chromium fix, not mvnd
 - **Python, Ruby, and other language instances** - do not use mvnd
 - **JavaParser instances** - use `./mvnw` wrapper script, not mvnd

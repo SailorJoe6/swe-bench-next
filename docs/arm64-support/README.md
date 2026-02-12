@@ -403,6 +403,32 @@ python: not found
 **Solution:**
 This is expected for non-Python projects (Java, Go, etc.). SWE-agent automatically builds a layer with standalone Python at `/root/python3.11/`. This happens automatically - do not disable `python_standalone_dir`.
 
+### mvnd: Cannot Execute Binary File (Java/Druid/Gson)
+
+**Error:**
+```
+/usr/local/mvnd/bin/mvnd: cannot execute binary file: Exec format error
+```
+
+**Cause:** Apache Maven Daemon (mvnd) has no Linux ARM64 releases. The x86_64 binary cannot run on ARM64.
+
+**Solution:** This is already fixed in the ARM64-patched SWE-bench fork. The fix creates a `mvnd` -> `mvn` symlink on ARM64. See [mvnd-fix.md](mvnd-fix.md) for details.
+
+### Maven Resource Bundle SNAPSHOT Error (Java/Druid)
+
+**Error:**
+```
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-remote-resources-plugin:1.5:process
+The following artifacts could not be resolved:
+org.apache.apache.resources:apache-jar-resource-bundle:jar:1.5-SNAPSHOT
+```
+
+**Cause:** Fresh ARM64 Docker images lack cached Maven artifacts. Druid's `pom.xml` references a SNAPSHOT version that can't be resolved from public repos.
+
+**Solution:** This is already fixed in the ARM64-patched SWE-bench fork. The fix adds a `sed` command to Druid install specs that replaces `1.5-SNAPSHOT` with the released `1.5` version. See [mvnd-fix.md](mvnd-fix.md#related-fix-maven-resource-bundle-snapshot) for details.
+
+**Note:** This only affects Druid instances. Lucene uses Gradle (not Maven) and is unaffected.
+
 ### Build Failures
 
 If specific instances fail to build:
