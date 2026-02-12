@@ -30,7 +30,7 @@ find full-run -name "*.pred" -type f -exec sh -c 'cat "$1"; echo' _ {} \; > eval
 # Run evaluation
 nohup python -m swebench.harness.run_evaluation \
   --dataset_name SWE-bench/SWE-bench_Multilingual \
-  --predictions_path results/phase3/eval-batch-N/predictions.jsonl \
+  --predictions_path eval-batch/predictions.jsonl \
   --max_workers $MAX_WORKERS \
   --run_id eval-batch \
   --arch arm64 \
