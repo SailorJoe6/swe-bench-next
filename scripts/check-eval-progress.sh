@@ -54,23 +54,55 @@ else
     PROGRESS_PCT="0.0"
 fi
 
-# Read exit statuses if available
-if [ -f "$EVAL_DIR/run_batch_exit_statuses.yaml" ]; then
-    SUBMITTED=$(grep -A 500 "submitted:" "$EVAL_DIR/run_batch_exit_statuses.yaml" | grep "^    -" | grep -v "exit_error" | wc -l || echo "0")
-    EXIT_ERROR=$(grep -A 500 "submitted (exit_error):" "$EVAL_DIR/run_batch_exit_statuses.yaml" | grep "^    -" | wc -l || echo "0")
+# Count completed instances from directory structure
+# This is more robust than relying on run_batch_exit_statuses.yaml which gets overwritten on restart
+if [ -d "$EVAL_DIR" ]; then
+    SUBMITTED=0
+    EXIT_ERROR=0
+    
+    for d in "$EVAL_DIR"/*/; do
+        if [ -d "$d" ]; then
+            instance_dir=$(basename "$d")
+            info_log="$d/${instance_dir}.info.log"
+            
+            if [ -f "$info_log" ]; then
+                if grep -q "Trajectory saved" "$info_log" 2>/dev/null; then
+                    if grep -q "Exit due to unknown error" "$info_log" 2>/dev/null; then
+                        EXIT_ERROR=$((EXIT_ERROR + 1))
+                    else
+                        SUBMITTED=$((SUBMITTED + 1))
+                    fi
+                fi
+            fi
+        fi
+    done
+    
+    COMPLETED=$((SUBMITTED + EXIT_ERROR))
 else
     SUBMITTED="N/A"
     EXIT_ERROR="N/A"
+    COMPLETED=0
 fi
 
-# Get last completed instance
+# Get last completed instance from Trajectory saved log entries
 if [ -d "$EVAL_DIR" ]; then
-    LAST_COMPLETED=$(ls -t "$EVAL_DIR" | grep -v "\.log$\|\.yaml$" | head -1)
-    if [ -n "$LAST_COMPLETED" ]; then
-        LAST_COMPLETED_TIME=$(stat -c %y "$EVAL_DIR/$LAST_COMPLETED" 2>/dev/null | cut -d'.' -f1 || echo "Unknown")
-    else
-        LAST_COMPLETED="N/A"
-        LAST_COMPLETED_TIME="N/A"
+    LAST_COMPLETED=""
+    LAST_COMPLETED_TIME=""
+    
+    # Find the most recent Trajectory saved entry
+    last_traj_line=$(grep "Trajectory saved" "$EVAL_DIR"/*/*.info.log 2>/dev/null | tail -1 || true)
+    
+    if [ -n "$last_traj_line" ]; then
+        LAST_COMPLETED_TIME=$(echo "$last_traj_line" | sed 's/^[^:]*:\([0-9-]* [0-9:,]*\).*/\1/')
+        LAST_COMPLETED=$(echo "$last_traj_line" | grep -oP 'results/phase3/full-run/\K[^/]+(?=/[^/]*)' | head -1)
+    fi
+    
+    if [ -z "$LAST_COMPLETED" ]; then
+        # Fallback: use directory listing
+        LAST_COMPLETED=$(ls -t "$EVAL_DIR" 2>/dev/null | grep -v "\.log$\|\.yaml$" | head -1 || echo "N/A")
+        if [ -n "$LAST_COMPLETED" ] && [ -d "$EVAL_DIR/$LAST_COMPLETED" ]; then
+            LAST_COMPLETED_TIME=$(stat -c %y "$EVAL_DIR/$LAST_COMPLETED" 2>/dev/null | cut -d'.' -f1 || echo "Unknown")
+        fi
     fi
 else
     LAST_COMPLETED="N/A"
@@ -107,8 +139,29 @@ fi
 # Display status
 echo -e "${BOLD}Status:${NC}           $RUNNING_STATUS (PID: $RUNNING_PID)"
 echo -e "${BOLD}Progress:${NC}         $COMPLETED / $TOTAL_INSTANCES instances (${PROGRESS_PCT}%)"
-echo -e "${BOLD}Successful:${NC}       ${GREEN}$SUBMITTED patches submitted${NC}"
+echo -e "${BOLD}Predictions:${NC}      ${GREEN}$SUBMITTED patches generated${NC}"
 echo -e "${BOLD}Errors:${NC}           ${RED}$EXIT_ERROR exit errors${NC}"
+
+# Add evaluation stats if JSON exists
+EVAL_JSON="$EVAL_DIR.eval-batch.json"
+if [ -f "$EVAL_JSON" ]; then
+    RESOLVED=$(python3 -c "import json; d=json.load(open('$EVAL_JSON')); print(d.get('resolved_instances', 0))" 2>/dev/null || echo "0")
+    UNRESOLVED=$(python3 -c "import json; d=json.load(open('$EVAL_JSON')); print(d.get('unresolved_instances', 0))" 2>/dev/null || echo "0")
+    EMPTY=$(python3 -c "import json; d=json.load(open('$EVAL_JSON')); print(d.get('empty_patch_instances', 0))" 2>/dev/null || echo "0")
+    EVALUATED=$(python3 -c "import json; d=json.load(open('$EVAL_JSON')); print(d.get('completed_instances', 0))" 2>/dev/null || echo "0")
+    
+    if [ "$EVALUATED" -gt 0 ]; then
+        PASS_RATE="${RESOLVED}/${EVALUATED} ($((RESOLVED * 100 / EVALUATED))%)"
+    else
+        PASS_RATE="N/A"
+    fi
+    echo
+    echo -e "${BOLD}Evaluation:${NC}       ${BLUE}$EVALUATED patches evaluated${NC}"
+    echo -e "${BOLD}  Resolved:${NC}         ${GREEN}$RESOLVED${NC}"
+    echo -e "${BOLD}  Unresolved:${NC}       ${RED}$UNRESOLVED${NC}"
+    echo -e "${BOLD}  Empty:${NC}            ${YELLOW}$EMPTY${NC}"
+    echo -e "${BOLD}  Pass Rate:${NC}        ${CYAN}$PASS_RATE${NC}"
+fi
 echo
 echo -e "${BOLD}${BLUE}Last Completed:${NC}"
 echo -e "  Instance: $LAST_COMPLETED"
@@ -126,14 +179,4 @@ echo -e "  Est. remaining:     ${REMAINING_HOURS} hours"
 echo -e "  Est. completion:    $EST_COMPLETION"
 echo
 echo -e "${BOLD}Output Directory:${NC} $EVAL_DIR"
-
-# Show recent log activity
-if [ -f "$EVAL_DIR/run_batch.log" ]; then
-    echo
-    echo -e "${BOLD}${BLUE}Recent Activity:${NC}"
-    echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
-    tail -100 "$EVAL_DIR/run_batch.log" | grep -E "(INFO|ERROR|WARNING)" | tail -5 || echo "  (no recent log entries)"
-    echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
-fi
-
 echo
