@@ -1,16 +1,11 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+## Launching the Plane (Session Start)
 
-## Quick Reference
+Study the following files in order to understand the project:
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
-bd sync               # Sync with git
-```
+1. **[README.md](README.md)** - Project overview, features, and configuration
+3. **[docs/README.md](docs/README.md)** - Documentation index and navigation
 
 ## Landing the Plane (Session Completion)
 

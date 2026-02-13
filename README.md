@@ -2,7 +2,7 @@
 
 Evaluating [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8) on SWE-Bench Multilingual using native ARM64 containers on NVIDIA DGX Spark.
 
-This project reproduces the [Qwen3-Coder-Next on Spark setup](https://forums.developer.nvidia.com/t/how-to-run-qwen3-coder-next-on-spark/359571) and extends it with ARM64 support for SWE-Bench evaluation.
+This project reproduces the [Qwen3-Coder-Next on Spark setup](https://forums.developer.nvidia.com/t/how-to-run-qwen3-coder-next-on-spark/359571) and extends it with SWE-Bench evaluation via SWE-Agent.  Note that neither SWE-Bench nor SWE-Agent have support for the ARM64 CPU on the spark, so to run the test evaluations on a spark, the project depends on SailorJoe's forks of [SWE-Bench](https://github.com/SailorJoe6/SWE-bench/tree/arm64-support) and [SWE-Agent](https://github.com/SailorJoe6/SWE-agent/tree/arm64-support#).  
 
 ## Quick Start
 
@@ -19,7 +19,7 @@ See **[docs/](docs/)** for complete documentation including:
 │   ├── guides/          # User guides (e.g., quickstart)
 │   ├── implementation/  # Technical implementation docs
 │   └── arm64-support/   # ARM64 implementation guide
-├── scripts/             # vLLM server scripts and utilities
+├── scripts/             # scripts and utilities automating all aspects of the project
 └── results/             # Evaluation outputs (gitignored)
     ├── phase1/          # vLLM validation
     └── phase3/          # SWE-Agent evaluation results
