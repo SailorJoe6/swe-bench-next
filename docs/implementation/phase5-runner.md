@@ -1,6 +1,6 @@
 # Phase 5 Runner (Current State)
 
-This document describes the current implementation state of the new SWE-Bench runner introduced by the active spec.
+This document describes the current implementation state of the active SWE-Bench runner.
 
 ## Script
 
@@ -8,71 +8,54 @@ This document describes the current implementation state of the new SWE-Bench ru
 
 ## Scope Implemented
 
-The script currently implements **Phase 1 (single-instance runner skeleton)** plus multiple **Phase 2 pre-execution milestones**:
+The script now implements the full **Phase 2 single-instance runtime core**:
 
 - Requires `--instance-id <id>`.
 - Requires `--output-dir <path>`.
 - Supports optional `--manifest-dir <path>` (defaults to `--output-dir`).
 - Supports `--max-loops <n>` (default: `50`; positive integer validation).
-- Enforces Codex-only local profile contract by locking command form to `codex -p local ...`.
-- Performs required runtime prompt preflight for:
+- Enforces Codex-only local profile contract with `codex -p local --dangerously-bypass-approvals-and-sandbox exec`.
+- Performs runtime prompt preflight for:
   - `ralph/prompts/plan.md`
   - `ralph/prompts/execute.md`
   - `ralph/prompts/handoff.md`
-  Missing any of these files hard-fails the invocation.
-- Loads instance metadata and `problem_statement` before execution:
-  - default source: `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`)
-  - test/dev override: `SWE_BENCH_INSTANCES_FILE=<json|jsonl>`
+- Loads instance metadata and `problem_statement` from:
+  - default dataset `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`)
+  - optional fixture override `SWE_BENCH_INSTANCES_FILE=<json|jsonl>`
 - Seeds per-instance planning docs under `--output-dir/plans/`:
-  - `SPECIFICATION.md` (from `problem_statement`)
-  - `EXECUTION_PLAN.md` (seeded in-progress scaffold)
-- Runtime prompt assets are now tracked in-repo at:
-  - `ralph/prompts/plan.md`
-  - `ralph/prompts/execute.md`
-  - `ralph/prompts/handoff.md`
-- Performs container/image pre-execution checks for:
-  - required image tag `sweb.eval.arm64.<instance_id>:latest` (`missing_image` on failure)
-  - codex availability inside the instance image container context
-- Attempts runtime codex bootstrap fallback into the image when codex is missing:
-  - binary source: `/home/sailorjoe6/.cargo/bin/codex` (or `CODEX_BOOTSTRAP_BIN_PATH` override)
-  - config source: `/home/sailorjoe6/.codex/config.toml` (or `CODEX_BOOTSTRAP_CONFIG_PATH` override)
-  - bootstrap failures map to `failure_reason_code: "codex_bootstrap_failed"`
-- Initializes per-instance runtime directory structure under the provided output directory.
-- Writes per-instance artifact placeholders:
+  - `SPECIFICATION.md`
+  - `EXECUTION_PLAN.md`
+- Performs image/bootstrap prechecks:
+  - validates `sweb.eval.arm64.<instance_id>:latest`
+  - checks codex inside image and attempts bootstrap fallback
+- Executes runtime phases:
+  - one `plan` pass
+  - execute loop (`execute` then `handoff`) up to `--max-loops`
+- Classifies final state using per-instance plan locations:
+  - `plans/archive/` with non-empty patch => `success`
+  - `plans/blocked/` => `failed` with `failure_reason_code: "blocked"`
+  - root plans after budget => `incomplete` with `failure_reason_code: "incomplete"`
+- Writes required per-instance artifacts:
   - `<instance>.patch`
   - `<instance>.pred`
   - `<instance>.status.json`
 - Writes/updates run-level manifest:
   - `<manifest_dir>/run_manifest.json`
 
-## Current Status Semantics
+## Exit Semantics
 
-Phase 1 is scaffolding-only, so instance execution is not implemented yet.
+- `0` when status is `success`.
+- `1` when status is `failed`.
+- `20` when status is `incomplete`.
 
-Current behavior for valid invocations (with required runtime prompts present):
+## Failure Reason Mapping
 
-- Writes seeded plan docs, artifacts, and manifest with `status: "incomplete"`.
-- Exits with code `20` to indicate runtime loop work is still pending.
-
-Current behavior when prompt preflight fails:
-
-- Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "runtime_error"`.
-- Exits with code `1`.
-
-Current behavior when metadata/problem statement loading fails:
-
-- Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "runtime_error"`.
-- Exits with code `1`.
-
-Current behavior when the required image is missing:
-
-- Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "missing_image"`.
-- Exits with code `1`.
-
-Current behavior when codex bootstrap fails:
-
-- Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "codex_bootstrap_failed"`.
-- Exits with code `1`.
+- Prompt/metadata/codex runtime failures => `runtime_error`
+- Missing image => `missing_image`
+- Codex bootstrap failure => `codex_bootstrap_failed`
+- Blocked terminal state => `blocked`
+- Loop budget exhaustion/non-terminal end state => `incomplete`
+- Success => `null`
 
 ## Usage
 
@@ -86,7 +69,8 @@ scripts/start-swebench.sh \
 
 ## Notes
 
-Remaining work from the plan includes:
+Remaining plan work is now outside `start-swebench.sh`:
 
-- Plan/execute/handoff runtime loop and terminal-state classification.
-- Final success/failed behavior and batch orchestrator integration.
+- `scripts/run-swebench-batch.sh` (Phase 3 batch orchestrator)
+- `scripts/prepare-swebench-codex-images.sh` (Phase 4 manual prep utility)
+- Top-level workflow docs end-state (Phase 5)

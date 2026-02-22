@@ -6,6 +6,7 @@ DATASET_SUBSET="multilingual"
 DATASET_SPLIT="test"
 MODEL_NAME_OR_PATH="qwen3-coder-next-FP8,codex,ralph"
 CODEX_PROFILE="local"
+CODEX_BIN="${CODEX_BIN:-codex}"
 INSTANCE_FIXTURE_ENV_VAR="SWE_BENCH_INSTANCES_FILE"
 MAX_LOOPS_DEFAULT=50
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -427,6 +428,78 @@ manifest_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 }
 
+codex_phase_log_path() {
+  local phase="$1"
+  echo "$OUTPUT_DIR/logs/codex_${phase}.log"
+}
+
+run_codex_phase() {
+  local phase="$1"
+  local pass_index="$2"
+  local prompt_path="$3"
+  local phase_log
+  local prompt_text
+
+  phase_log="$(codex_phase_log_path "$phase")"
+  prompt_text="$(cat "$prompt_path")"
+  printf 'phase=%s pass=%s cmd=%s -p %s --dangerously-bypass-approvals-and-sandbox exec <prompt:%s>\n' \
+    "$phase" "$pass_index" "$CODEX_BIN" "$CODEX_PROFILE" "$prompt_path" >> "$OUTPUT_DIR/logs/codex_command.txt"
+
+  SWE_BENCH_RUNTIME_PHASE="$phase" \
+  SWE_BENCH_EXECUTE_PASS="$pass_index" \
+  SWE_BENCH_INSTANCE_ID="$INSTANCE_ID" \
+  SWE_BENCH_OUTPUT_DIR="$OUTPUT_DIR" \
+  SWE_BENCH_PLANS_DIR="$OUTPUT_DIR/plans" \
+  SWE_BENCH_SPEC_PATH="$SPEC_PATH" \
+  SWE_BENCH_PLAN_PATH="$PLAN_PATH" \
+  SWE_BENCH_ARCHIVE_DIR="$ARCHIVE_DIR" \
+  SWE_BENCH_BLOCKED_DIR="$BLOCKED_DIR" \
+  SWE_BENCH_PATCH_PATH="$PATCH_PATH" \
+    "$CODEX_BIN" -p "$CODEX_PROFILE" --dangerously-bypass-approvals-and-sandbox exec "$prompt_text" >>"$phase_log" 2>&1
+}
+
+classify_plan_state() {
+  local mode="$1"
+  local context="$2"
+
+  if [[ -f "$BLOCKED_SPEC_PATH" || -f "$BLOCKED_PLAN_PATH" ]]; then
+    STATUS="failed"
+    FAILURE_REASON_CODE="blocked"
+    FAILURE_REASON_DETAIL="Planning docs entered blocked state (${context})."
+    ERROR_LOG=""
+    return 0
+  fi
+
+  if [[ -f "$ARCHIVE_SPEC_PATH" && -f "$ARCHIVE_PLAN_PATH" ]]; then
+    if [[ -s "$PATCH_PATH" ]]; then
+      STATUS="success"
+      FAILURE_REASON_CODE="null"
+      FAILURE_REASON_DETAIL=""
+      ERROR_LOG=""
+    else
+      STATUS="incomplete"
+      FAILURE_REASON_CODE="incomplete"
+      FAILURE_REASON_DETAIL="Planning docs archived but patch output is empty (${context})."
+      ERROR_LOG=""
+    fi
+    return 0
+  fi
+
+  if [[ "$mode" == "loop" ]] && ([[ -f "$SPEC_PATH" ]] || [[ -f "$PLAN_PATH" ]]); then
+    return 1
+  fi
+
+  STATUS="incomplete"
+  FAILURE_REASON_CODE="incomplete"
+  if [[ -f "$SPEC_PATH" || -f "$PLAN_PATH" ]]; then
+    FAILURE_REASON_DETAIL="Planning docs remain in root plans directory after execute budget (${context})."
+  else
+    FAILURE_REASON_DETAIL="Planning docs were not found in archive/blocked/root at classification time (${context})."
+  fi
+  ERROR_LOG=""
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --instance-id)
@@ -494,16 +567,26 @@ PATCH_PATH="$OUTPUT_DIR/${INSTANCE_ID}.patch"
 MANIFEST_PATH="$MANIFEST_DIR/run_manifest.json"
 SPEC_PATH="$OUTPUT_DIR/plans/SPECIFICATION.md"
 PLAN_PATH="$OUTPUT_DIR/plans/EXECUTION_PLAN.md"
+ARCHIVE_DIR="$OUTPUT_DIR/plans/archive"
+BLOCKED_DIR="$OUTPUT_DIR/plans/blocked"
+ARCHIVE_SPEC_PATH="$ARCHIVE_DIR/SPECIFICATION.md"
+ARCHIVE_PLAN_PATH="$ARCHIVE_DIR/EXECUTION_PLAN.md"
+BLOCKED_SPEC_PATH="$BLOCKED_DIR/SPECIFICATION.md"
+BLOCKED_PLAN_PATH="$BLOCKED_DIR/EXECUTION_PLAN.md"
 METADATA_LOAD_ERR_PATH="$OUTPUT_DIR/logs/instance_metadata_error.log"
 IMAGE_PRECHECK_ERR_PATH="$OUTPUT_DIR/logs/image_precheck_error.log"
 CODEX_BOOTSTRAP_ERR_PATH="$OUTPUT_DIR/logs/codex_bootstrap_error.log"
 IMAGE_REF="$(instance_image_ref "$INSTANCE_ID")"
+PLAN_PROMPT_PATH="$PROMPTS_DIR/plan.md"
+EXECUTE_PROMPT_PATH="$PROMPTS_DIR/execute.md"
+HANDOFF_PROMPT_PATH="$PROMPTS_DIR/handoff.md"
+RUNTIME_ERR_PATH="$OUTPUT_DIR/logs/runtime_error.log"
 
 START_TIME="$(timestamp_utc)"
 ERROR_LOG=""
 STATUS="incomplete"
 FAILURE_REASON_CODE="incomplete"
-FAILURE_REASON_DETAIL="Phase 1 skeleton complete: CLI contracts are implemented; runtime execution loop is pending."
+FAILURE_REASON_DETAIL="Planning docs remain in root plans directory after execute budget."
 MODEL_PATCH=""
 MISSING_PROMPTS=""
 PROBLEM_STATEMENT=""
@@ -588,11 +671,63 @@ if [[ "$STATUS" != "failed" ]]; then
   fi
 fi
 
-# Placeholder command declaration to lock the hard requirement for Phase 2 runtime execution.
-CODEX_EXEC_CMD=(codex -p "$CODEX_PROFILE" --dangerously-bypass-approvals-and-sandbox exec)
-printf '%s\n' "${CODEX_EXEC_CMD[*]}" > "$OUTPUT_DIR/logs/codex_command.txt"
+if [[ "$STATUS" != "failed" ]]; then
+  : > "$OUTPUT_DIR/logs/codex_command.txt"
+fi
 
 : > "$PATCH_PATH"
+EXECUTE_PASSES_RUN=0
+if [[ "$STATUS" != "failed" ]]; then
+  if ! run_codex_phase "plan" "0" "$PLAN_PROMPT_PATH" 2>"$RUNTIME_ERR_PATH"; then
+    STATUS="failed"
+    FAILURE_REASON_CODE="runtime_error"
+    FAILURE_REASON_DETAIL="Plan prompt execution failed for ${INSTANCE_ID}."
+    if [[ -f "$RUNTIME_ERR_PATH" ]]; then
+      ERROR_LOG="$(cat "$RUNTIME_ERR_PATH")"
+    fi
+  fi
+fi
+
+if [[ "$STATUS" != "failed" ]] && ! classify_plan_state "loop" "after_plan"; then
+  for ((pass=1; pass<=MAX_LOOPS; pass++)); do
+    EXECUTE_PASSES_RUN="$pass"
+
+    if ! run_codex_phase "execute" "$pass" "$EXECUTE_PROMPT_PATH" 2>"$RUNTIME_ERR_PATH"; then
+      STATUS="failed"
+      FAILURE_REASON_CODE="runtime_error"
+      FAILURE_REASON_DETAIL="Execute prompt failed on pass ${pass} for ${INSTANCE_ID}."
+      if [[ -f "$RUNTIME_ERR_PATH" ]]; then
+        ERROR_LOG="$(cat "$RUNTIME_ERR_PATH")"
+      fi
+      break
+    fi
+
+    if ! run_codex_phase "handoff" "$pass" "$HANDOFF_PROMPT_PATH" 2>"$RUNTIME_ERR_PATH"; then
+      STATUS="failed"
+      FAILURE_REASON_CODE="runtime_error"
+      FAILURE_REASON_DETAIL="Handoff prompt failed on execute pass ${pass} for ${INSTANCE_ID}."
+      if [[ -f "$RUNTIME_ERR_PATH" ]]; then
+        ERROR_LOG="$(cat "$RUNTIME_ERR_PATH")"
+      fi
+      break
+    fi
+
+    if classify_plan_state "loop" "after_execute_pass_${pass}"; then
+      break
+    fi
+  done
+fi
+
+if [[ "$STATUS" == "incomplete" && "$FAILURE_REASON_CODE" == "incomplete" ]]; then
+  classify_plan_state "final" "max_loops_${MAX_LOOPS}_execute_passes_${EXECUTE_PASSES_RUN}" || true
+fi
+
+if [[ "$STATUS" == "success" ]]; then
+  MODEL_PATCH="$(cat "$PATCH_PATH")"
+else
+  MODEL_PATCH=""
+fi
+
 write_pred_json "$PRED_PATH" "$INSTANCE_ID" "$MODEL_PATCH"
 END_TIME="$(timestamp_utc)"
 write_status_json "$STATUS_PATH" "$INSTANCE_ID" "$STATUS" "$FAILURE_REASON_CODE" "$FAILURE_REASON_DETAIL" "$ERROR_LOG"
@@ -603,5 +738,10 @@ if [[ "$STATUS" == "failed" ]]; then
   exit 1
 fi
 
-echo "start-swebench phase1 skeleton complete for ${INSTANCE_ID}; status=${STATUS}"
+if [[ "$STATUS" == "success" ]]; then
+  echo "start-swebench completed for ${INSTANCE_ID}; status=success"
+  exit 0
+fi
+
+echo "start-swebench completed for ${INSTANCE_ID}; status=incomplete"
 exit 20

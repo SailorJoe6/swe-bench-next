@@ -32,7 +32,7 @@ This plan intentionally avoids building a monolithic script with mixed concerns.
 - `.ralph/` is planning-only and never runtime state.
 
 ## 3. Current Status (2026-02-22)
-Completed in this session:
+Completed to date:
 - Phase 1 single-instance runner skeleton added at `scripts/start-swebench.sh`.
 - CLI contracts implemented:
   - required `--instance-id`
@@ -66,10 +66,16 @@ Completed in this session:
   - script now checks codex availability inside the instance image and runs bootstrap fallback when missing.
   - bootstrap failures now map to `status=failed`, `failure_reason_code=codex_bootstrap_failed`.
   - tests now include deterministic missing-image and bootstrap-failure regressions in `tests/test_start_swebench.sh`.
-- Latest pushed implementation commit for the current Phase 2 baseline: `bb1a746`.
+- Phase 2 execute-loop/classification milestone completed:
+  - `scripts/start-swebench.sh` now executes `plan` once, then runs `execute` + `handoff` passes with `--max-loops` budget control.
+  - terminal classification now maps from per-instance plan state:
+    - `plans/archive` + non-empty patch => `status=success`, `failure_reason_code=null`
+    - `plans/blocked` => `status=failed`, `failure_reason_code=blocked`
+    - root plans at loop end => `status=incomplete`, `failure_reason_code=incomplete`
+  - exit semantics are now: `0` success, `1` failed, `20` incomplete.
+  - tests now include deterministic success, blocked, and max-loop budget regressions.
 
 Still not implemented:
-- Phase 2 runtime core remainder (plan/execute/handoff loop, final classification semantics).
 - `scripts/run-swebench-batch.sh` (Phase 3).
 - `scripts/prepare-swebench-codex-images.sh` (Phase 4).
 - Full Phase 5 docs end-state describing finished batch + single runner behavior.
@@ -202,20 +208,22 @@ No open decisions currently.
 ## 9. Beads Tracking
 - Umbrella feature: `swebench-eval-next-4as` (in progress)
 - Remaining follow-ups:
-  - `swebench-eval-next-4as.1` (Phase 2 runtime core)
   - `swebench-eval-next-4as.2` (Phase 3 batch orchestrator)
   - `swebench-eval-next-4as.3` (Phase 4 image prep utility)
   - `swebench-eval-next-4as.4` (Phase 5 docs completion)
 
 ## 10. Handoff Start Point
-1. Continue `swebench-eval-next-4as.1` (Phase 2 runtime core) in this order:
-   - execute-loop with `--max-loops` budget and terminal classification.
-2. Keep `scripts/start-swebench.sh` single-instance only; defer all batch behavior to `swebench-eval-next-4as.2`.
-3. First concrete implementation target:
-   - in `scripts/start-swebench.sh`, implement plan/execute/handoff iteration with `--max-loops` budget handling;
-   - classify terminal state based on per-instance `plans/` placement (`archive` => success, `blocked` => failed/blocked, root => incomplete);
-   - keep per-instance artifact contract unchanged (`.patch`, `.pred`, `.status.json` always emitted).
-4. Validation to add immediately with that change:
-   - extend `tests/test_start_swebench.sh` with deterministic cases for blocked and terminal incomplete classification;
-   - add a focused `--max-loops` budget regression (`--max-loops 1`);
-   - run `bash -n scripts/start-swebench.sh tests/test_start_swebench.sh` and `tests/test_start_swebench.sh`.
+1. Start `swebench-eval-next-4as.2` (Phase 3 batch orchestrator).
+2. Keep `scripts/start-swebench.sh` single-instance only; all multi-instance logic belongs in `scripts/run-swebench-batch.sh`.
+3. First concrete Phase 3 target:
+   - create `scripts/run-swebench-batch.sh`;
+   - create one timestamped run root;
+   - resolve/sort instance IDs lexicographically;
+   - invoke `scripts/start-swebench.sh` per instance with:
+     - `--output-dir <run_root>/<instance_id>`
+     - `--manifest-dir <run_root>`
+   - aggregate `<instance>.pred` into `<run_root>/predictions.jsonl`.
+4. Validation to add immediately with Phase 3:
+   - deterministic ordering regression with unsorted instance subset;
+   - continue-on-failure regression;
+   - aggregation regression for `predictions.jsonl`.
