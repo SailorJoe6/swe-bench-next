@@ -93,15 +93,15 @@ Completed to date:
 - Phase 3 docs update completed:
   - updated `docs/implementation/phase5-runner.md` to document both single-instance and batch contracts.
   - updated docs indexes (`docs/README.md`, `docs/implementation/README.md`) for Phase 5 batch visibility.
-- Handoff checkpoint for next session:
-  - latest pushed Phase 3 commit is `0080484` on `origin/main`.
-  - regression scripts currently covering Phase 2/3 runner behavior:
-    - `tests/test_start_swebench.sh`
-    - `tests/test_run_swebench_batch.sh`
-  - next implementation task remains Phase 4 utility (`scripts/prepare-swebench-codex-images.sh`) before final docs completion.
+- Phase 4 manual image prep utility completed:
+  - added `scripts/prepare-swebench-codex-images.sh` as a manual optional utility.
+  - utility now injects codex binary/config into selected images and commits in place to the same tags.
+  - target selectors now support `--instance-id`, `--instance-file`, `--image`, and `--all-local-images`.
+  - added `--dry-run` target preflight mode.
+  - added regression coverage at `tests/test_prepare_swebench_codex_images.sh` for selector validation, successful prep flow, missing bootstrap source, and partial missing-image failure behavior.
+  - added docs at `docs/implementation/prepare-codex-images.md` and updated docs indexes.
 
 Still not implemented:
-- `scripts/prepare-swebench-codex-images.sh` (Phase 4).
 - Full Phase 5 docs end-state describing finished batch + single runner behavior.
 
 ## 4. Execution Phases
@@ -232,11 +232,9 @@ No open decisions currently.
 ## 9. Beads Tracking
 - Umbrella feature: `swebench-eval-next-4as` (in progress)
 - Remaining follow-ups:
-  - `swebench-eval-next-4as.3` (Phase 4 image prep utility)
   - `swebench-eval-next-4as.4` (Phase 5 docs completion)
 
 ## 10. Handoff Start Point
-1. Start `swebench-eval-next-4as.3` (Phase 4 manual image prep utility).
-2. Implement `scripts/prepare-swebench-codex-images.sh` as manual/optional only; do not auto-invoke it from runtime scripts.
-3. Keep image tag overwrite behavior in place (`sweb.eval.arm64.<instance>:latest`) after codex injection.
-4. After `.3`, continue `swebench-eval-next-4as.4` to complete top-level docs end-state and final acceptance review.
+1. Start `swebench-eval-next-4as.4` (Phase 5 docs completion).
+2. Finish top-level docs end-state for final phase5 workflow contracts (single-instance + batch usage, output schemas, failure code vocabulary, prediction/evaluation separation).
+3. Run full validation matrix and complete final acceptance review against spec criteria.

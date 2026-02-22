@@ -6,6 +6,7 @@ This document describes the current implementation state of the active SWE-Bench
 
 - `scripts/start-swebench.sh` (single-instance runner)
 - `scripts/run-swebench-batch.sh` (batch orchestrator)
+- `scripts/prepare-swebench-codex-images.sh` (manual codex image prep utility)
 
 ## Single-Instance Scope Implemented
 
@@ -92,9 +93,24 @@ scripts/start-swebench.sh \
 scripts/run-swebench-batch.sh [--instance-file <path>] [--max-loops 50]
 ```
 
+## Manual Image Prep Utility (Phase 4)
+
+`scripts/prepare-swebench-codex-images.sh` is implemented as a manual/optional helper.
+
+- Not auto-called by runtime scripts.
+- Injects codex binary/config into selected images.
+- Commits back to the same image tag (`sweb.eval.arm64.<instance_id>:latest`).
+- Supports selectors:
+  - `--instance-id`
+  - `--instance-file`
+  - `--image`
+  - `--all-local-images`
+- Supports `--dry-run` for target preflight.
+
+See **[Prepare Codex Images](prepare-codex-images.md)** for full usage and behavior.
+
 ## Notes
 
-Remaining plan work is now outside `start-swebench.sh`:
+Remaining plan work after this phase:
 
-- `scripts/prepare-swebench-codex-images.sh` (Phase 4 manual prep utility)
 - Top-level workflow docs end-state (Phase 5)
