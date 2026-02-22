@@ -1,0 +1,14 @@
+# Planning documents (ephemeral, per-project)
+plans/*
+
+# Configuration (project-specific)
+.env
+
+# Optional local prompts (non-runtime in this repo's phase5 workflow)
+prompts/prepare.md
+prompts/design.md
+prompts/blocked.md
+
+# Log files (created under ralph/logs/)
+logs/*
+!logs/.keep

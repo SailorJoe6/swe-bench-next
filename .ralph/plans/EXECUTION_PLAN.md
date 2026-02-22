@@ -52,9 +52,10 @@ Completed in this session:
 - Phase 2 prompt-preflight milestone completed:
   - `scripts/start-swebench.sh` now hard-fails when any required runtime prompt file is missing.
   - tests now cover both preflight failure and success behavior in isolated runner roots.
-- Prompt-path repo state note:
-  - required runtime prompt location per spec is `ralph/prompts/{plan,execute,handoff}.md`.
-  - concrete runtime prompt files are still missing from the tracked repo tree and must be added in a follow-up tied to `swebench-eval-next-4as.1`.
+- Phase 2 prompt-asset follow-up completed:
+  - resolved `ralph` path tracking constraints by converting it from a gitlink entry to normal tracked files in this repository.
+  - added tracked runtime prompts at `ralph/prompts/{plan,execute,handoff}.md`.
+  - tests now include a repository-level prompt-availability regression for `scripts/start-swebench.sh`.
 
 Still not implemented:
 - Phase 2 runtime core remainder (container/image checks, codex bootstrap fallback, spec-seed from `problem_statement`, plan/execute/handoff loop, final classification semantics).
@@ -191,15 +192,13 @@ No open decisions currently.
 - Umbrella feature: `swebench-eval-next-4as` (in progress)
 - Remaining follow-ups:
   - `swebench-eval-next-4as.1` (Phase 2 runtime core)
-  - `swebench-eval-next-4as.1.1` (land tracked runtime prompt files under `ralph/prompts/`)
   - `swebench-eval-next-4as.2` (Phase 3 batch orchestrator)
   - `swebench-eval-next-4as.3` (Phase 4 image prep utility)
   - `swebench-eval-next-4as.4` (Phase 5 docs completion)
 
 ## 10. Handoff Start Point
-1. Start with `swebench-eval-next-4as.1.1` to land tracked `ralph/prompts/{plan,execute,handoff}.md` in the repo tree; this unblocks fully spec-compliant runtime prompt preflight.
-2. Continue `swebench-eval-next-4as.1` (Phase 2 runtime core) in this order:
+1. Continue `swebench-eval-next-4as.1` (Phase 2 runtime core) in this order:
    - instance metadata load (`problem_statement`) and spec seeding,
    - container/image + codex bootstrap fallback,
    - execute-loop with `--max-loops` budget and terminal classification.
-3. Keep `scripts/start-swebench.sh` single-instance only; defer all batch behavior to `swebench-eval-next-4as.2`.
+2. Keep `scripts/start-swebench.sh` single-instance only; defer all batch behavior to `swebench-eval-next-4as.2`.

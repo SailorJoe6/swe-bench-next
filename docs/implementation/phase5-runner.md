@@ -20,6 +20,10 @@ The script currently implements **Phase 1 (single-instance runner skeleton)** pl
   - `ralph/prompts/execute.md`
   - `ralph/prompts/handoff.md`
   Missing any of these files hard-fails the invocation.
+- Runtime prompt assets are now tracked in-repo at:
+  - `ralph/prompts/plan.md`
+  - `ralph/prompts/execute.md`
+  - `ralph/prompts/handoff.md`
 - Initializes per-instance runtime directory structure under the provided output directory.
 - Writes per-instance artifact placeholders:
   - `<instance>.patch`

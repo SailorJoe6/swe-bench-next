@@ -1,0 +1,560 @@
+#!/usr/bin/env bash
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load .env file if it exists (from ralph directory)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+  # shellcheck disable=SC1090
+  source "$SCRIPT_DIR/.env"
+fi
+
+# UNATTENDED must be CLI-only, ignore env variables
+UNATTENDED=0
+
+# Hardcoded prompt paths (must match .gitignore pattern)
+DESIGN_PROMPT="ralph/prompts/design.md"
+PLAN_PROMPT="ralph/prompts/plan.md"
+EXECUTE_PROMPT="ralph/prompts/execute.md"
+HANDOFF_PROMPT="ralph/prompts/handoff.md"
+PREPARE_PROMPT="ralph/prompts/prepare.md"
+BLOCKED_PROMPT="ralph/prompts/blocked.md"
+
+# Configurable planning document paths
+: "${SPECIFICATION:=ralph/plans/SPECIFICATION.md}"
+: "${EXECUTION_PLAN:=ralph/plans/EXECUTION_PLAN.md}"
+
+# Log file locations (default to ralph/logs/ from the parent directory)
+: "${LOG_DIR:=ralph/logs}"
+: "${ERROR_LOG:=$LOG_DIR/ERROR_LOG.md}"
+: "${OUTPUT_LOG:=$LOG_DIR/OUTPUT_LOG.md}"
+
+# Default behavior flags
+: "${UNATTENDED:=0}"
+: "${USE_CODEX:=0}"
+: "${FREESTYLE:=0}"
+: "${CALLBACK:=}"
+: "${CONTAINER_NAME:=}"
+: "${CONTAINER_RUNTIME:=docker}"
+: "${YOLO:=0}"
+: "${RESUME_MODE:=0}"
+: "${RESUME_SESSION:=}"
+
+# CONTAINER_WORKDIR defaults to /<basename> if using container
+# This will be set dynamically if --container is used without --workdir
+
+PASS=0
+RESUME_PENDING=0
+
+if [[ -n "$LOG_DIR" ]]; then
+  mkdir -p "$LOG_DIR"
+fi
+
+trap 'exit 0' INT
+
+# Parse command-line arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u|--unattended)
+      UNATTENDED=1
+      shift
+      ;;
+    --codex)
+      USE_CODEX=1
+      shift
+      ;;
+    --container)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --container requires a container name"
+        exit 2
+      fi
+      CONTAINER_NAME="$2"
+      shift 2
+      ;;
+    --workdir)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --workdir requires a path"
+        exit 2
+      fi
+      CONTAINER_WORKDIR="$2"
+      shift 2
+      ;;
+    --callback)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --callback requires a script path"
+        exit 2
+      fi
+      CALLBACK="$2"
+      shift 2
+      ;;
+    -f|--freestyle)
+      FREESTYLE=1
+      shift
+      ;;
+    -y|--yolo)
+      YOLO=1
+      shift
+      ;;
+    --resume)
+      RESUME_MODE=1
+      # Check if next arg exists and doesn't start with -
+      if [[ $# -ge 2 && ! "$2" =~ ^- ]]; then
+        RESUME_SESSION="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  -u, --unattended        Full permissions; use non-interactive mode only during execute/handoff"
+      echo "  -f, --freestyle         Run execute loop with prepare prompt (skip spec/plan checks)"
+      echo "  -y, --yolo              Enable full permissions (interactive unless -u)"
+      echo "  --codex                 Use Codex instead of Claude"
+      echo "  --resume [guid]         Resume previous session (optional session ID for Claude or Codex)"
+      echo "  --container <name>      Execute commands inside specified container"
+      echo "  --workdir <path>        Container working directory (default: /<basename>)"
+      echo "  --callback <script>     Run script after each pass"
+      echo "  -h, --help              Show this help message"
+      exit 0
+      ;;
+    *)
+      echo "Error: Unknown option: $1"
+      echo "Usage: $0 [OPTIONS]"
+      echo "Run '$0 --help' for more information"
+      exit 2
+      ;;
+  esac
+done
+
+# Freestyle + unattended: downgrade to yolo (elevated permissions, still interactive)
+if [[ $FREESTYLE -eq 1 && $UNATTENDED -eq 1 ]]; then
+  UNATTENDED=0
+  YOLO=1
+fi
+
+# Resume should only apply to the first pass of the main loop.
+RESUME_PENDING=$RESUME_MODE
+
+# Set default CONTAINER_WORKDIR if using container and not explicitly set
+if [[ -n "$CONTAINER_NAME" && -z "$CONTAINER_WORKDIR" ]]; then
+  BASENAME="$(basename "$(pwd)")"
+  CONTAINER_WORKDIR="/$BASENAME"
+fi
+
+# Validate callback if specified
+if [[ -n "$CALLBACK" ]]; then
+  if ! command -v -- "$CALLBACK" >/dev/null 2>&1; then
+    echo "Error: --callback not found or not executable: $CALLBACK" >&2
+    exit 2
+  fi
+fi
+
+# Validate container runtime if using containers
+if [[ -n "$CONTAINER_NAME" ]]; then
+  if ! command -v "$CONTAINER_RUNTIME" >/dev/null 2>&1; then
+    echo "Error: $CONTAINER_RUNTIME not found (required for --container)" >&2
+    exit 2
+  fi
+fi
+
+ensure_container_running() {
+  if [[ -z "$CONTAINER_NAME" ]]; then
+    return 0
+  fi
+
+  local running
+  running="$("$CONTAINER_RUNTIME" inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)"
+  if [[ -z "$running" ]]; then
+    echo "Error: container not found: $CONTAINER_NAME" >&2
+    exit 2
+  fi
+  if [[ "$running" != "true" ]]; then
+    echo "Error: container is not running: $CONTAINER_NAME" >&2
+    exit 2
+  fi
+}
+
+container_exec() {
+  "$CONTAINER_RUNTIME" exec "${CONTAINER_EXEC_FLAGS[@]}" -w "$CONTAINER_WORKDIR" "$CONTAINER_NAME" "$@"
+}
+
+set_container_exec_flags() {
+  local require_tty="$1"
+  if [[ "$require_tty" == "1" ]]; then
+    if [[ ! -t 0 ]]; then
+      echo "Error: interactive mode requires a TTY. Re-run from a real terminal or use --unattended." >&2
+      exit 2
+    fi
+    CONTAINER_EXEC_FLAGS=(-i -t)
+  else
+    CONTAINER_EXEC_FLAGS=(-i)
+  fi
+}
+
+set_permission_flags() {
+  if [[ $YOLO -eq 1 || $UNATTENDED -eq 1 ]]; then
+    PERM_CODEX_FLAGS=(--dangerously-bypass-approvals-and-sandbox)
+    PERM_CLAUDE_FLAGS=(--dangerously-skip-permissions)
+  else
+    PERM_CODEX_FLAGS=()
+    PERM_CLAUDE_FLAGS=()
+  fi
+}
+
+run_noninteractive_cmd() {
+  local pid
+  local target_pid
+  local previous_trap
+  previous_trap=$(trap -p INT)
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" &
+    pid=$!
+    target_pid="-$pid"
+  else
+    "$@" &
+    pid=$!
+    target_pid="$pid"
+    local pgid
+    pgid=$(ps -o pgid= "$pid" 2>/dev/null | tr -d ' ')
+    if [[ -n "$pgid" ]]; then
+      target_pid="-$pgid"
+    fi
+  fi
+
+  trap 'kill -INT -- "$target_pid" 2>/dev/null; sleep 1; kill -TERM -- "$target_pid" 2>/dev/null; sleep 1; kill -KILL -- "$target_pid" 2>/dev/null; exit 130' INT
+  wait "$pid"
+  local status=$?
+
+  if [[ -n "$previous_trap" ]]; then
+    eval "$previous_trap"
+  else
+    trap - INT
+  fi
+
+  return $status
+}
+
+run_codex() {
+  local noninteractive="$1"
+  local prompt_text="$2"
+
+  local codex_cmd=(codex "${PERM_CODEX_FLAGS[@]}")
+  if [[ $RESUME_PENDING -eq 1 ]]; then
+    if [[ "$noninteractive" == "1" ]]; then
+      codex_cmd+=(exec resume)
+      if [[ -n "$RESUME_SESSION" ]]; then
+        codex_cmd+=("$RESUME_SESSION")
+      else
+        codex_cmd+=(--last)
+      fi
+    else
+      codex_cmd+=(resume)
+      if [[ -n "$RESUME_SESSION" ]]; then
+        codex_cmd+=("$RESUME_SESSION")
+      else
+        codex_cmd+=(--last)
+      fi
+    fi
+  else
+    if [[ "$noninteractive" == "1" ]]; then
+      codex_cmd+=(exec "$prompt_text")
+    else
+      codex_cmd+=("$prompt_text")
+    fi
+  fi
+
+  if [[ -n "$CONTAINER_NAME" ]]; then
+    set_container_exec_flags "$([[ "$noninteractive" == "1" ]] && echo 0 || echo 1)"
+    if [[ "$noninteractive" == "1" ]]; then
+      run_noninteractive_cmd "$CONTAINER_RUNTIME" exec "${CONTAINER_EXEC_FLAGS[@]}" -w "$CONTAINER_WORKDIR" "$CONTAINER_NAME" "${codex_cmd[@]}"
+    else
+      container_exec bash -c 'trap "exit 130" INT; exec "$@"' _ "${codex_cmd[@]}"
+    fi
+  else
+    if [[ "$noninteractive" == "1" ]]; then
+      run_noninteractive_cmd "${codex_cmd[@]}"
+    else
+      bash -c 'trap "exit 130" INT; exec "$@"' _ "${codex_cmd[@]}"
+    fi
+  fi
+}
+
+run_claude() {
+  local noninteractive="$1"
+  local prompt_text="$2"
+
+  local resume_flags=()
+  if [[ $RESUME_PENDING -eq 1 ]]; then
+    if [[ -n "$RESUME_SESSION" ]]; then
+      resume_flags=(--resume "$RESUME_SESSION")
+    else
+      resume_flags=(--continue)
+    fi
+  fi
+
+  if [[ -n "$CONTAINER_NAME" ]]; then
+    set_container_exec_flags "$([[ "$noninteractive" == "1" ]] && echo 0 || echo 1)"
+    if [[ "$noninteractive" == "1" ]]; then
+      run_noninteractive_cmd "$CONTAINER_RUNTIME" exec "${CONTAINER_EXEC_FLAGS[@]}" -w "$CONTAINER_WORKDIR" "$CONTAINER_NAME" claude "${PERM_CLAUDE_FLAGS[@]}" "${resume_flags[@]}" -p "$prompt_text"
+    else
+      container_exec bash -c 'trap "exit 130" INT; exec claude "$@"' _ "${PERM_CLAUDE_FLAGS[@]}" "${resume_flags[@]}" "$prompt_text"
+    fi
+  else
+    if [[ "$noninteractive" == "1" ]]; then
+      run_noninteractive_cmd claude "${PERM_CLAUDE_FLAGS[@]}" "${resume_flags[@]}" -p "$prompt_text"
+    else
+      bash -c 'trap "exit 130" INT; exec claude "$@"' _ "${PERM_CLAUDE_FLAGS[@]}" "${resume_flags[@]}" "$prompt_text"
+    fi
+  fi
+}
+
+# Main loop - iterate through workflow phases
+while :; do
+  PASS=$((PASS + 1))
+  PROMPT="$DESIGN_PROMPT"
+  EXECUTE_MODE=0
+  BLOCKED_MODE=0
+
+  # Notify user when entering unattended mode
+  if [[ $UNATTENDED -eq 1 ]]; then
+    echo "--------"
+    echo "Entering unattended execution loop.  See logs for details"
+  fi
+
+  # Check for freestyle mode first since it overrides normal phase checks
+  if [[ $FREESTYLE -eq 1 ]]; then
+    PROMPT="$PREPARE_PROMPT"
+    EXECUTE_MODE=1
+  else
+    # Determine which phase we're in based on planning documents
+    if [[ -f "$SPECIFICATION" && -f "$EXECUTION_PLAN" ]]; then
+      PROMPT="$EXECUTE_PROMPT"
+      EXECUTE_MODE=1
+    elif [[ -f "$SPECIFICATION" ]]; then
+      PROMPT="$PLAN_PROMPT"
+    elif [[ -f "$EXECUTION_PLAN" ]]; then
+      echo "Error: $EXECUTION_PLAN exists but $SPECIFICATION is missing."
+      exit 1
+    else
+      # Neither planning document exists - check if blocked before entering design mode
+      BLOCKED_DIR="ralph/plans/blocked"
+      if [[ -f "$BLOCKED_DIR/SPECIFICATION.md" || -f "$BLOCKED_DIR/EXECUTION_PLAN.md" ]]; then
+        PROMPT="$BLOCKED_PROMPT"
+        BLOCKED_MODE=1
+      fi
+    fi
+  fi
+
+  set_permission_flags
+  if [[ $EXECUTE_MODE -eq 1 && $UNATTENDED -eq 1 ]]; then
+    NONINTERACTIVE=1
+  else
+    NONINTERACTIVE=0
+  fi
+
+  # Validate prompt file exists and provide helpful error message
+  if [[ ! -f "$PROMPT" ]]; then
+    echo "Error: Prompt file not found: $PROMPT"
+    echo ""
+    echo "Prompts are project-specific and must be customized for your project."
+    echo "Copy from the example template(s):"
+    echo ""
+    missing_any=0
+    if [[ ! -f "$DESIGN_PROMPT" ]]; then
+      echo "  cp ralph/prompts/design.example.md ralph/prompts/design.md"
+      missing_any=1
+    fi
+    if [[ ! -f "$PLAN_PROMPT" ]]; then
+      echo "  cp ralph/prompts/plan.example.md ralph/prompts/plan.md"
+      missing_any=1
+    fi
+    if [[ ! -f "$EXECUTE_PROMPT" ]]; then
+      echo "  cp ralph/prompts/execute.example.md ralph/prompts/execute.md"
+      missing_any=1
+    fi
+    if [[ ! -f "$PREPARE_PROMPT" ]]; then
+      echo "  cp ralph/prompts/prepare.example.md ralph/prompts/prepare.md"
+      missing_any=1
+    fi
+    if [[ ! -f "$HANDOFF_PROMPT" ]]; then
+      echo "  cp ralph/prompts/handoff.example.md ralph/prompts/handoff.md"
+      missing_any=1
+    fi
+    if [[ ! -f "$BLOCKED_PROMPT" ]]; then
+      echo "  Create ralph/prompts/blocked.md"
+      missing_any=1
+    fi
+    if [[ $missing_any -eq 0 ]]; then
+      echo "  (all prompt files are present)"
+    fi
+    echo ""
+    echo "Then edit the prompt to reference your project's documentation."
+    exit 1
+  fi
+
+  ensure_container_running
+  prompt_text="$(cat "$PROMPT")"
+  if [[ $NONINTERACTIVE -eq 1 ]]; then
+    error_offset=0
+    output_offset=0
+    if [[ -f "$ERROR_LOG" ]]; then
+      error_offset=$(wc -c < "$ERROR_LOG")
+    fi
+    if [[ -f "$OUTPUT_LOG" ]]; then
+      output_offset=$(wc -c < "$OUTPUT_LOG")
+    fi
+    {
+      printf '\n---\n\nPass %d:\n' "$PASS"
+      if [[ $USE_CODEX -eq 1 ]]; then
+        run_codex 1 "$prompt_text"
+      else
+        run_claude 1 "$prompt_text"
+      fi
+    } >> "$OUTPUT_LOG" 2> "$ERROR_LOG"
+  else
+    if [[ $USE_CODEX -eq 1 ]]; then
+      run_codex 0 "$prompt_text" 2> "$ERROR_LOG"
+    else
+      run_claude 0 "$prompt_text" 2> "$ERROR_LOG"
+    fi
+  fi
+  status=$?
+  RESUME_PENDING=0
+  if [[ $NONINTERACTIVE -eq 1 && -f "$ERROR_LOG" ]]; then
+    if tail -c "+$((error_offset + 1))" "$ERROR_LOG" | grep -qi "task interrupted"; then
+      exit 0
+    fi
+  fi
+  if [[ $NONINTERACTIVE -eq 1 && -f "$OUTPUT_LOG" ]]; then
+    if tail -c "+$((output_offset + 1))" "$OUTPUT_LOG" | grep -qi "task interrupted"; then
+      exit 0
+    fi
+  fi
+  if [[ $status -eq 130 ]]; then
+    exit 0
+  fi
+
+  if [[ $status -ne 0 ]]; then
+    if [[ $USE_CODEX -eq 1 ]]; then
+      echo "Codex exited with status $status"
+    else
+      echo "Claude exited with status $status"
+    fi
+    cat "$ERROR_LOG"
+    exit 1
+  fi
+
+  # Run handoff (execute phase only, and only if planning docs still exist or in freestyle mode)
+  if [[ $EXECUTE_MODE -eq 1 ]]; then
+    # Only run handoff if we're in freestyle mode OR both planning docs still exist
+    if [[ $FREESTYLE -eq 1 || (-f "$SPECIFICATION" && -f "$EXECUTION_PLAN") ]]; then
+      if [[ -f "$HANDOFF_PROMPT" ]]; then
+        handoff_text="$(cat "$HANDOFF_PROMPT")"
+        handoff_require_tty=1
+        if [[ $UNATTENDED -eq 1 ]]; then
+          handoff_require_tty=0
+        fi
+
+        if [[ $UNATTENDED -eq 1 ]]; then
+          {
+            echo ""
+            echo "----------------"
+            echo "Running handoff..."
+            if [[ $USE_CODEX -eq 1 ]]; then
+              codex_session_id=""
+              if [[ -f "$ERROR_LOG" ]]; then
+                codex_session_id="$(
+                  awk -F 'session id:' '/session id:/ {id=$2} END {gsub(/^[[:space:]]+|[[:space:]]+$/,"",id); print id}' "$ERROR_LOG"
+                )"
+              fi
+              handoff_codex_flags=("${PERM_CODEX_FLAGS[@]}")
+              if [[ -n "$CONTAINER_NAME" ]]; then
+                set_container_exec_flags "$handoff_require_tty"
+                if [[ -n "$codex_session_id" ]]; then
+                  container_exec codex "${handoff_codex_flags[@]}" exec resume "$codex_session_id" "$handoff_text" || echo "Warning: Handoff failed (non-fatal)"
+                else
+                  container_exec codex "${handoff_codex_flags[@]}" exec resume --last "$handoff_text" || echo "Warning: Handoff failed (non-fatal)"
+                fi
+              else
+                if [[ -n "$codex_session_id" ]]; then
+                  codex "${handoff_codex_flags[@]}" exec resume "$codex_session_id" "$handoff_text" || echo "Warning: Handoff failed (non-fatal)"
+                else
+                  codex "${handoff_codex_flags[@]}" exec resume --last "$handoff_text" || echo "Warning: Handoff failed (non-fatal)"
+                fi
+              fi
+            else
+              handoff_claude_flags=("${PERM_CLAUDE_FLAGS[@]}")
+              if [[ -n "$CONTAINER_NAME" ]]; then
+                set_container_exec_flags "$handoff_require_tty"
+                container_exec claude "${handoff_claude_flags[@]}" --continue "$handoff_text" || echo "Warning: Handoff failed (non-fatal)"
+              else
+                claude "${handoff_claude_flags[@]}" --continue "$handoff_text" || echo "Warning: Handoff failed (non-fatal)"
+              fi
+            fi
+          } >> "$OUTPUT_LOG" 2> "$ERROR_LOG"
+        else
+          echo "Running handoff..."
+          if [[ $USE_CODEX -eq 1 ]]; then
+            codex_session_id=""
+            if [[ -f "$ERROR_LOG" ]]; then
+              codex_session_id="$(
+                awk -F 'session id:' '/session id:/ {id=$2} END {gsub(/^[[:space:]]+|[[:space:]]+$/,"",id); print id}' "$ERROR_LOG"
+              )"
+            fi
+            handoff_codex_flags=("${PERM_CODEX_FLAGS[@]}")
+            handoff_status=0
+            error_offset=0
+            if [[ -f "$ERROR_LOG" ]]; then
+              error_offset=$(wc -c < "$ERROR_LOG")
+            fi
+            if [[ -n "$CONTAINER_NAME" ]]; then
+              set_container_exec_flags "$handoff_require_tty"
+              if [[ -n "$codex_session_id" ]]; then
+                run_noninteractive_cmd "$CONTAINER_RUNTIME" exec "${CONTAINER_EXEC_FLAGS[@]}" -w "$CONTAINER_WORKDIR" "$CONTAINER_NAME" codex "${handoff_codex_flags[@]}" exec resume "$codex_session_id" "$handoff_text" 2> >(tee -a "$ERROR_LOG" >&2)
+              else
+                run_noninteractive_cmd "$CONTAINER_RUNTIME" exec "${CONTAINER_EXEC_FLAGS[@]}" -w "$CONTAINER_WORKDIR" "$CONTAINER_NAME" codex "${handoff_codex_flags[@]}" exec resume --last "$handoff_text" 2> >(tee -a "$ERROR_LOG" >&2)
+              fi
+            else
+              if [[ -n "$codex_session_id" ]]; then
+                run_noninteractive_cmd codex "${handoff_codex_flags[@]}" exec resume "$codex_session_id" "$handoff_text" 2> >(tee -a "$ERROR_LOG" >&2)
+              else
+                run_noninteractive_cmd codex "${handoff_codex_flags[@]}" exec resume --last "$handoff_text" 2> >(tee -a "$ERROR_LOG" >&2)
+              fi
+            fi
+            handoff_status=$?
+            stty sane 2>/dev/null  # Reset terminal in case codex left it in bad state
+            echo "DEBUG: codex exited with status $handoff_status" >&2
+            if [[ -f "$ERROR_LOG" ]]; then
+              if tail -c "+$((error_offset + 1))" "$ERROR_LOG" | grep -q "task interrupted"; then
+                exit 0
+              fi
+            fi
+            if [[ $handoff_status -ne 0 ]]; then
+              exit 0  # Exit cleanly on any non-zero (including SIGINT)
+            fi
+          else
+            handoff_claude_flags=("${PERM_CLAUDE_FLAGS[@]}")
+            if [[ -n "$CONTAINER_NAME" ]]; then
+              set_container_exec_flags "$handoff_require_tty"
+              container_exec claude "${handoff_claude_flags[@]}" --continue "$handoff_text" 2>&1 || echo "Warning: Handoff failed (non-fatal)"
+            else
+              claude "${handoff_claude_flags[@]}" --continue "$handoff_text" 2>&1 || echo "Warning: Handoff failed (non-fatal)"
+            fi
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  # run callback if specified
+  if [[ -n "$CALLBACK" ]]; then
+    if ! "$CALLBACK"; then
+      echo "Callback failed: $CALLBACK" >&2
+      exit 1
+    fi
+  fi
+done

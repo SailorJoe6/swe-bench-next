@@ -173,9 +173,38 @@ assert manifest["counts"]["failed"] == 1
 PY
 }
 
+run_case_repo_runtime_prompts_available() {
+  local tmpdir
+  local codex_bin
+  tmpdir="$(mktemp -d)"
+  codex_bin="$(make_fake_codex_bin)"
+
+  set +e
+  PATH="$codex_bin:$PATH" "$SCRIPT" --instance-id repo__issue-3 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "20" "$status" "repo runtime prompts should satisfy preflight and keep skeleton incomplete exit"
+
+  python3 - "$tmpdir" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+out = root / "out"
+
+status = json.loads((out / "repo__issue-3.status.json").read_text(encoding="utf-8"))
+assert status["status"] == "incomplete"
+assert status["failure_reason_code"] == "incomplete"
+assert "Missing required runtime prompt file(s)" not in status["failure_reason_detail"]
+PY
+}
+
 run_case_missing_required_args
 run_case_invalid_max_loops
 run_case_default_manifest_and_artifacts
 run_case_missing_runtime_prompts
+run_case_repo_runtime_prompts_available
 
 echo "PASS: start-swebench phase1 tests"
