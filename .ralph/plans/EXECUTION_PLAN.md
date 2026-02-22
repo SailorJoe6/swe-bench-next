@@ -44,9 +44,10 @@ Completed to date:
   - output directory initialization
   - placeholder per-instance artifacts (`.patch`, `.pred`, `.status.json`)
   - run-level manifest creation/update at `<manifest_dir>/run_manifest.json`.
-- Current skeleton semantics:
-  - valid invocation exits with code `20` and `status=incomplete` by design until Phase 2 runtime loop is implemented.
-  - runtime precheck failures now map to explicit reason codes (`missing_image`, `codex_bootstrap_failed`) before execute-loop work begins.
+- Current single-runner runtime semantics:
+  - `scripts/start-swebench.sh` now runs plan + execute/handoff loop with execute-pass budgeting via `--max-loops`.
+  - terminal classification/exit codes are now active: `success`/`0`, `failed`/`1`, `incomplete`/`20`.
+  - precheck/runtime failures map to explicit reason codes (`missing_image`, `codex_bootstrap_failed`, `runtime_error`, `blocked`, `incomplete`).
 - Phase 1 validation tests added at `tests/test_start_swebench.sh`.
 - Docs updated for current state at `docs/implementation/phase5-runner.md`.
 - Phase 2 prompt-preflight milestone completed:
