@@ -101,7 +101,7 @@ Completed to date:
   - added regression coverage at `tests/test_prepare_swebench_codex_images.sh` for selector validation, successful prep flow, missing bootstrap source, and partial missing-image failure behavior.
   - added docs at `docs/implementation/prepare-codex-images.md` and updated docs indexes.
 - Handoff checkpoint for next session:
-  - latest pushed commit is `afc4889` on `origin/main` (plan handoff refresh + acceptance closure sequencing).
+  - latest pushed commit is `3f674b6` on `origin/main` (plan handoff refresh + acceptance closure sequencing).
   - runner regression scripts currently passing:
     - `tests/test_start_swebench.sh`
     - `tests/test_run_swebench_batch.sh`
