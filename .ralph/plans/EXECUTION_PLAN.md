@@ -75,9 +75,26 @@ Completed to date:
     - root plans at loop end => `status=incomplete`, `failure_reason_code=incomplete`
   - exit semantics are now: `0` success, `1` failed, `20` incomplete.
   - tests now include deterministic success, blocked, and max-loop budget regressions.
+- Phase 3 batch orchestrator milestone completed:
+  - added `scripts/run-swebench-batch.sh` with sequential orchestration only.
+  - batch scope resolution now supports:
+    - default multilingual/test scope, and
+    - optional `--instance-file` subset.
+  - instance execution order is deterministic lexicographic `instance_id`.
+  - batch runner creates one timestamped run root at `results/phase5/ralph-codex-local/<timestamp>/`.
+  - each per-instance invocation now passes:
+    - `--output-dir <run_root>/<instance_id>`
+    - `--manifest-dir <run_root>`
+  - batch continues after per-instance failures and aggregates `<instance>.pred` to `<run_root>/predictions.jsonl`.
+  - added dedicated regression coverage in `tests/test_run_swebench_batch.sh` for:
+    - deterministic ordering on unsorted subset input,
+    - continue-on-failure behavior,
+    - `predictions.jsonl` aggregation.
+- Phase 3 docs update completed:
+  - updated `docs/implementation/phase5-runner.md` to document both single-instance and batch contracts.
+  - updated docs indexes (`docs/README.md`, `docs/implementation/README.md`) for Phase 5 batch visibility.
 
 Still not implemented:
-- `scripts/run-swebench-batch.sh` (Phase 3).
 - `scripts/prepare-swebench-codex-images.sh` (Phase 4).
 - Full Phase 5 docs end-state describing finished batch + single runner behavior.
 
@@ -209,22 +226,11 @@ No open decisions currently.
 ## 9. Beads Tracking
 - Umbrella feature: `swebench-eval-next-4as` (in progress)
 - Remaining follow-ups:
-  - `swebench-eval-next-4as.2` (Phase 3 batch orchestrator)
   - `swebench-eval-next-4as.3` (Phase 4 image prep utility)
   - `swebench-eval-next-4as.4` (Phase 5 docs completion)
 
 ## 10. Handoff Start Point
-1. Start `swebench-eval-next-4as.2` (Phase 3 batch orchestrator).
-2. Keep `scripts/start-swebench.sh` single-instance only; all multi-instance logic belongs in `scripts/run-swebench-batch.sh`.
-3. First concrete Phase 3 target:
-   - create `scripts/run-swebench-batch.sh`;
-   - create one timestamped run root;
-   - resolve/sort instance IDs lexicographically;
-   - invoke `scripts/start-swebench.sh` per instance with:
-     - `--output-dir <run_root>/<instance_id>`
-     - `--manifest-dir <run_root>`
-   - aggregate `<instance>.pred` into `<run_root>/predictions.jsonl`.
-4. Validation to add immediately with Phase 3:
-   - deterministic ordering regression with unsorted instance subset;
-   - continue-on-failure regression;
-   - aggregation regression for `predictions.jsonl`.
+1. Start `swebench-eval-next-4as.3` (Phase 4 manual image prep utility).
+2. Implement `scripts/prepare-swebench-codex-images.sh` as manual/optional only; do not auto-invoke it from runtime scripts.
+3. Keep image tag overwrite behavior in place (`sweb.eval.arm64.<instance>:latest`) after codex injection.
+4. After `.3`, continue `swebench-eval-next-4as.4` to complete top-level docs end-state and final acceptance review.

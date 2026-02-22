@@ -1,14 +1,15 @@
 # Phase 5 Runner (Current State)
 
-This document describes the current implementation state of the active SWE-Bench runner.
+This document describes the current implementation state of the active SWE-Bench Phase 5 runners.
 
-## Script
+## Scripts
 
-- `scripts/start-swebench.sh`
+- `scripts/start-swebench.sh` (single-instance runner)
+- `scripts/run-swebench-batch.sh` (batch orchestrator)
 
-## Scope Implemented
+## Single-Instance Scope Implemented
 
-The script now implements the full **Phase 2 single-instance runtime core**:
+`scripts/start-swebench.sh` implements the full **Phase 2 single-instance runtime core**:
 
 - Requires `--instance-id <id>`.
 - Requires `--output-dir <path>`.
@@ -42,13 +43,13 @@ The script now implements the full **Phase 2 single-instance runtime core**:
 - Writes/updates run-level manifest:
   - `<manifest_dir>/run_manifest.json`
 
-## Exit Semantics
+### Exit Semantics
 
 - `0` when status is `success`.
 - `1` when status is `failed`.
 - `20` when status is `incomplete`.
 
-## Failure Reason Mapping
+### Failure Reason Mapping
 
 - Prompt/metadata/codex runtime failures => `runtime_error`
 - Missing image => `missing_image`
@@ -57,7 +58,7 @@ The script now implements the full **Phase 2 single-instance runtime core**:
 - Loop budget exhaustion/non-terminal end state => `incomplete`
 - Success => `null`
 
-## Usage
+### Usage
 
 ```bash
 scripts/start-swebench.sh \
@@ -67,10 +68,33 @@ scripts/start-swebench.sh \
   [--max-loops 50]
 ```
 
+## Batch Scope Implemented
+
+`scripts/run-swebench-batch.sh` now implements **Phase 3 orchestration**:
+
+- Resolves instance IDs from:
+  - default scope (`SWE-bench/SWE-bench_Multilingual`, `multilingual`, `test`), or
+  - optional `--instance-file <path>` subset.
+- Sorts resolved IDs lexicographically by `instance_id`.
+- Creates one timestamped run root:
+  - `results/phase5/ralph-codex-local/<timestamp>/`
+- Invokes `scripts/start-swebench.sh` sequentially per instance with:
+  - `--output-dir <run_root>/<instance_id>`
+  - `--manifest-dir <run_root>`
+  - `--max-loops <n>` (default 50, overridable on batch script)
+- Continues processing after per-instance failures.
+- Builds run-level `predictions.jsonl` by aggregating `<run_root>/<instance_id>/<instance_id>.pred`.
+- Leaves run-level manifest ownership to `scripts/start-swebench.sh`.
+
+### Batch Usage
+
+```bash
+scripts/run-swebench-batch.sh [--instance-file <path>] [--max-loops 50]
+```
+
 ## Notes
 
 Remaining plan work is now outside `start-swebench.sh`:
 
-- `scripts/run-swebench-batch.sh` (Phase 3 batch orchestrator)
 - `scripts/prepare-swebench-codex-images.sh` (Phase 4 manual prep utility)
 - Top-level workflow docs end-state (Phase 5)
