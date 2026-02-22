@@ -101,7 +101,7 @@ Completed to date:
   - added regression coverage at `tests/test_prepare_swebench_codex_images.sh` for selector validation, successful prep flow, missing bootstrap source, and partial missing-image failure behavior.
   - added docs at `docs/implementation/prepare-codex-images.md` and updated docs indexes.
 - Handoff checkpoint for next session:
-  - latest pushed commit is `3e8b0ca` on `origin/main` (Phase 4 utility + tests + docs indexing + plan update).
+  - latest pushed commit is `6e6f093` on `origin/main` (Phase 5 docs finalization + plan handoff refresh).
   - runner regression scripts currently passing:
     - `tests/test_start_swebench.sh`
     - `tests/test_run_swebench_batch.sh`
@@ -113,6 +113,9 @@ Completed to date:
 
 Still not implemented:
 - Final acceptance review against spec criteria with validation-matrix execution results captured in this plan.
+- Closure sweep after acceptance review:
+  - close `swebench-eval-next-4as.6` and umbrella `swebench-eval-next-4as`,
+  - move `.ralph/plans/SPECIFICATION.md` and `.ralph/plans/EXECUTION_PLAN.md` to `.ralph/plans/archive/`.
 
 ## 4. Execution Phases
 
@@ -253,5 +256,7 @@ No open decisions currently.
      - `tests/test_run_swebench_batch.sh`
      - `tests/test_prepare_swebench_codex_images.sh`
    - `shellcheck` (if available).
-3. Record acceptance-criteria verification results against `.ralph/plans/SPECIFICATION.md`.
+3. Record acceptance-criteria verification results against `.ralph/plans/SPECIFICATION.md` directly in this plan:
+   - for each criterion, note `pass/fail`,
+   - include evidence pointer (test name, output artifact, or script location).
 4. If all criteria are satisfied, close umbrella issue and archive plan/spec docs.
