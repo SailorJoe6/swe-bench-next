@@ -29,6 +29,79 @@ EOF
   echo "$tmpdir"
 }
 
+make_fake_docker_bin() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  cat > "$tmpdir/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+maybe_fail() {
+  local stage="$1"
+  if [[ "${FAKE_DOCKER_FAIL_STAGE:-}" == "$stage" ]]; then
+    echo "fake docker forced failure at stage: $stage" >&2
+    exit "${FAKE_DOCKER_FAIL_EXIT_CODE:-1}"
+  fi
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  image)
+    subcmd="${2:-}"
+    if [[ "$subcmd" == "inspect" ]]; then
+      maybe_fail "image_inspect"
+      if [[ "${FAKE_DOCKER_IMAGE_EXISTS:-1}" == "1" ]]; then
+        exit 0
+      fi
+      echo "Error: No such image: ${3:-unknown}" >&2
+      exit 1
+    fi
+    ;;
+  run)
+    maybe_fail "run"
+    if [[ "$*" == *"command -v codex"* ]]; then
+      if [[ "${FAKE_DOCKER_CONTAINER_HAS_CODEX:-1}" == "1" ]]; then
+        exit 0
+      fi
+      echo "codex not found in container" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  create)
+    maybe_fail "create"
+    echo "fake-container-id"
+    exit 0
+    ;;
+  start)
+    maybe_fail "start"
+    exit 0
+    ;;
+  exec)
+    maybe_fail "exec"
+    exit 0
+    ;;
+  cp)
+    maybe_fail "cp"
+    exit 0
+    ;;
+  commit)
+    maybe_fail "commit"
+    exit 0
+    ;;
+  rm)
+    maybe_fail "rm"
+    exit 0
+    ;;
+esac
+
+maybe_fail "${cmd:-unknown}"
+exit 0
+EOF
+  chmod +x "$tmpdir/docker"
+  echo "$tmpdir"
+}
+
 make_isolated_runner_root() {
   local tmpdir
   tmpdir="$(mktemp -d)"
@@ -86,17 +159,19 @@ run_case_invalid_max_loops() {
 run_case_default_manifest_and_artifacts() {
   local tmpdir
   local codex_bin
+  local docker_bin
   local isolated_script
   local instance_fixture
   tmpdir="$(make_isolated_runner_root)"
   codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
   isolated_script="$tmpdir/scripts/start-swebench.sh"
   instance_fixture="$tmpdir/instances.jsonl"
   write_required_prompts "$tmpdir"
   write_instance_fixture "$instance_fixture" "repo__issue-1" "Fix the broken parser edge-case in foo/bar."
 
   set +e
-  PATH="$codex_bin:$PATH" SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id repo__issue-1 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  PATH="$docker_bin:$codex_bin:$PATH" FAKE_DOCKER_IMAGE_EXISTS=1 FAKE_DOCKER_CONTAINER_HAS_CODEX=1 SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id repo__issue-1 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
   local status=$?
   set -e
 
@@ -199,14 +274,16 @@ PY
 run_case_repo_runtime_prompts_available() {
   local tmpdir
   local codex_bin
+  local docker_bin
   local instance_fixture
   tmpdir="$(mktemp -d)"
   codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
   instance_fixture="$tmpdir/instances.jsonl"
   write_instance_fixture "$instance_fixture" "repo__issue-3" "Address the null handling bug in importer."
 
   set +e
-  PATH="$codex_bin:$PATH" SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$SCRIPT" --instance-id repo__issue-3 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  PATH="$docker_bin:$codex_bin:$PATH" FAKE_DOCKER_IMAGE_EXISTS=1 FAKE_DOCKER_CONTAINER_HAS_CODEX=1 SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$SCRIPT" --instance-id repo__issue-3 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
   local status=$?
   set -e
 
@@ -224,6 +301,106 @@ status = json.loads((out / "repo__issue-3.status.json").read_text(encoding="utf-
 assert status["status"] == "incomplete"
 assert status["failure_reason_code"] == "incomplete"
 assert "Missing required runtime prompt file(s)" not in status["failure_reason_detail"]
+PY
+}
+
+run_case_missing_instance_image() {
+  local tmpdir
+  local docker_bin
+  local isolated_script
+  local instance_fixture
+  tmpdir="$(make_isolated_runner_root)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "repo__missing-image" "Fix flaky test harness setup."
+
+  set +e
+  PATH="$docker_bin:$PATH" FAKE_DOCKER_IMAGE_EXISTS=0 SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id repo__missing-image --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "1" "$status" "missing instance image should fail invocation"
+  rg -F -q -- "Missing required instance image" /tmp/start-swebench-test.err || fail "missing-image error text not found"
+
+  python3 - "$tmpdir" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+out = root / "out"
+
+status = json.loads((out / "repo__missing-image.status.json").read_text(encoding="utf-8"))
+assert status["status"] == "failed"
+assert status["failure_reason_code"] == "missing_image"
+assert "sweb.eval.arm64.repo__missing-image:latest" in status["failure_reason_detail"]
+
+pred = json.loads((out / "repo__missing-image.pred").read_text(encoding="utf-8"))
+assert pred["model_patch"] == ""
+
+manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
+inst = manifest["instances"]["repo__missing-image"]
+assert inst["status"] == "failed"
+assert inst["failure_reason_code"] == "missing_image"
+PY
+}
+
+run_case_codex_bootstrap_failed() {
+  local tmpdir
+  local docker_bin
+  local isolated_script
+  local instance_fixture
+  local bootstrap_bin
+  local bootstrap_config
+  tmpdir="$(make_isolated_runner_root)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  bootstrap_bin="$tmpdir/bootstrap/codex"
+  bootstrap_config="$tmpdir/bootstrap/config.toml"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "repo__bootstrap-fail" "Repair codex bootstrap path."
+  mkdir -p "$tmpdir/bootstrap"
+  cat > "$bootstrap_bin" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$bootstrap_bin"
+  cat > "$bootstrap_config" <<'EOF'
+[profiles.local]
+provider = "local"
+EOF
+
+  set +e
+  PATH="$docker_bin:$PATH" FAKE_DOCKER_IMAGE_EXISTS=1 FAKE_DOCKER_CONTAINER_HAS_CODEX=0 FAKE_DOCKER_FAIL_STAGE=cp CODEX_BOOTSTRAP_BIN_PATH="$bootstrap_bin" CODEX_BOOTSTRAP_CONFIG_PATH="$bootstrap_config" SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id repo__bootstrap-fail --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "1" "$status" "codex bootstrap failure should fail invocation"
+  rg -F -q -- "Failed to bootstrap codex in image" /tmp/start-swebench-test.err || fail "codex-bootstrap-failed error text not found"
+
+  python3 - "$tmpdir" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+out = root / "out"
+
+status = json.loads((out / "repo__bootstrap-fail.status.json").read_text(encoding="utf-8"))
+assert status["status"] == "failed"
+assert status["failure_reason_code"] == "codex_bootstrap_failed"
+assert "Failed to bootstrap codex in image" in status["failure_reason_detail"]
+
+pred = json.loads((out / "repo__bootstrap-fail.pred").read_text(encoding="utf-8"))
+assert pred["model_patch"] == ""
+
+manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
+inst = manifest["instances"]["repo__bootstrap-fail"]
+assert inst["status"] == "failed"
+assert inst["failure_reason_code"] == "codex_bootstrap_failed"
 PY
 }
 
@@ -272,6 +449,8 @@ run_case_invalid_max_loops
 run_case_default_manifest_and_artifacts
 run_case_missing_runtime_prompts
 run_case_repo_runtime_prompts_available
+run_case_missing_instance_image
+run_case_codex_bootstrap_failed
 run_case_missing_instance_metadata
 
-echo "PASS: start-swebench phase1 tests"
+echo "PASS: start-swebench phase2 precheck tests"

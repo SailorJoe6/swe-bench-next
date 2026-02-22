@@ -8,7 +8,7 @@ This document describes the current implementation state of the new SWE-Bench ru
 
 ## Scope Implemented
 
-The script currently implements **Phase 1 (single-instance runner skeleton)** plus a first **Phase 2 preflight milestone**:
+The script currently implements **Phase 1 (single-instance runner skeleton)** plus multiple **Phase 2 pre-execution milestones**:
 
 - Requires `--instance-id <id>`.
 - Requires `--output-dir <path>`.
@@ -30,6 +30,13 @@ The script currently implements **Phase 1 (single-instance runner skeleton)** pl
   - `ralph/prompts/plan.md`
   - `ralph/prompts/execute.md`
   - `ralph/prompts/handoff.md`
+- Performs container/image pre-execution checks for:
+  - required image tag `sweb.eval.arm64.<instance_id>:latest` (`missing_image` on failure)
+  - codex availability inside the instance image container context
+- Attempts runtime codex bootstrap fallback into the image when codex is missing:
+  - binary source: `/home/sailorjoe6/.cargo/bin/codex` (or `CODEX_BOOTSTRAP_BIN_PATH` override)
+  - config source: `/home/sailorjoe6/.codex/config.toml` (or `CODEX_BOOTSTRAP_CONFIG_PATH` override)
+  - bootstrap failures map to `failure_reason_code: "codex_bootstrap_failed"`
 - Initializes per-instance runtime directory structure under the provided output directory.
 - Writes per-instance artifact placeholders:
   - `<instance>.patch`
@@ -57,6 +64,16 @@ Current behavior when metadata/problem statement loading fails:
 - Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "runtime_error"`.
 - Exits with code `1`.
 
+Current behavior when the required image is missing:
+
+- Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "missing_image"`.
+- Exits with code `1`.
+
+Current behavior when codex bootstrap fails:
+
+- Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "codex_bootstrap_failed"`.
+- Exits with code `1`.
+
 ## Usage
 
 ```bash
@@ -71,6 +88,5 @@ scripts/start-swebench.sh \
 
 Remaining work from the plan includes:
 
-- Container image checks and codex bootstrap fallback.
 - Plan/execute/handoff runtime loop and terminal-state classification.
 - Final success/failed behavior and batch orchestrator integration.

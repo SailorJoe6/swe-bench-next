@@ -12,6 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROMPTS_DIR="$REPO_ROOT/ralph/prompts"
 REQUIRED_PROMPTS=(plan.md execute.md handoff.md)
+IMAGE_REPO_PREFIX="sweb.eval.arm64"
+CODEX_BOOTSTRAP_BIN_PATH="${CODEX_BOOTSTRAP_BIN_PATH:-/home/sailorjoe6/.cargo/bin/codex}"
+CODEX_BOOTSTRAP_CONFIG_PATH="${CODEX_BOOTSTRAP_CONFIG_PATH:-/home/sailorjoe6/.codex/config.toml}"
 
 INSTANCE_ID=""
 OUTPUT_DIR=""
@@ -64,6 +67,102 @@ collect_missing_prompts() {
     return 1
   fi
 
+  return 0
+}
+
+instance_image_ref() {
+  local instance_id="$1"
+  echo "${IMAGE_REPO_PREFIX}.${instance_id}:latest"
+}
+
+ensure_docker_available() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker command not found on PATH" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+check_instance_image_exists() {
+  local image_ref="$1"
+  docker image inspect "$image_ref" >/dev/null
+}
+
+container_has_codex() {
+  local image_ref="$1"
+  docker run --rm --entrypoint /bin/sh "$image_ref" -lc "command -v codex >/dev/null 2>&1"
+}
+
+cleanup_bootstrap_container() {
+  local container_id="$1"
+  if [[ -n "$container_id" ]]; then
+    docker rm -f "$container_id" >/dev/null 2>&1 || true
+  fi
+}
+
+bootstrap_codex_into_image() {
+  local image_ref="$1"
+  local container_id=""
+
+  if [[ ! -x "$CODEX_BOOTSTRAP_BIN_PATH" ]]; then
+    echo "codex bootstrap binary is missing or not executable: $CODEX_BOOTSTRAP_BIN_PATH" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$CODEX_BOOTSTRAP_CONFIG_PATH" ]]; then
+    echo "codex bootstrap config is missing: $CODEX_BOOTSTRAP_CONFIG_PATH" >&2
+    return 1
+  fi
+
+  if ! container_id="$(docker create --entrypoint /bin/sh "$image_ref" -lc "while true; do sleep 3600; done")"; then
+    echo "failed to create bootstrap container from image: $image_ref" >&2
+    return 1
+  fi
+
+  if ! docker start "$container_id" >/dev/null; then
+    echo "failed to start bootstrap container: $container_id" >&2
+    cleanup_bootstrap_container "$container_id"
+    return 1
+  fi
+
+  if ! docker exec "$container_id" /bin/sh -lc "mkdir -p /usr/local/bin /root/.codex /home/sailorjoe6/.codex"; then
+    echo "failed to prepare codex target directories in container: $container_id" >&2
+    cleanup_bootstrap_container "$container_id"
+    return 1
+  fi
+
+  if ! docker cp "$CODEX_BOOTSTRAP_BIN_PATH" "$container_id:/usr/local/bin/codex"; then
+    echo "failed to copy codex binary into container: $container_id" >&2
+    cleanup_bootstrap_container "$container_id"
+    return 1
+  fi
+
+  if ! docker cp "$CODEX_BOOTSTRAP_CONFIG_PATH" "$container_id:/root/.codex/config.toml"; then
+    echo "failed to copy codex config into /root/.codex for container: $container_id" >&2
+    cleanup_bootstrap_container "$container_id"
+    return 1
+  fi
+
+  if ! docker cp "$CODEX_BOOTSTRAP_CONFIG_PATH" "$container_id:/home/sailorjoe6/.codex/config.toml"; then
+    echo "failed to copy codex config into /home/sailorjoe6/.codex for container: $container_id" >&2
+    cleanup_bootstrap_container "$container_id"
+    return 1
+  fi
+
+  if ! docker exec "$container_id" /bin/sh -lc "chmod +x /usr/local/bin/codex"; then
+    echo "failed to mark codex executable in container: $container_id" >&2
+    cleanup_bootstrap_container "$container_id"
+    return 1
+  fi
+
+  if ! docker commit "$container_id" "$image_ref" >/dev/null; then
+    echo "failed to commit codex-bootstrapped image: $image_ref" >&2
+    cleanup_bootstrap_container "$container_id"
+    return 1
+  fi
+
+  cleanup_bootstrap_container "$container_id"
   return 0
 }
 
@@ -396,6 +495,9 @@ MANIFEST_PATH="$MANIFEST_DIR/run_manifest.json"
 SPEC_PATH="$OUTPUT_DIR/plans/SPECIFICATION.md"
 PLAN_PATH="$OUTPUT_DIR/plans/EXECUTION_PLAN.md"
 METADATA_LOAD_ERR_PATH="$OUTPUT_DIR/logs/instance_metadata_error.log"
+IMAGE_PRECHECK_ERR_PATH="$OUTPUT_DIR/logs/image_precheck_error.log"
+CODEX_BOOTSTRAP_ERR_PATH="$OUTPUT_DIR/logs/codex_bootstrap_error.log"
+IMAGE_REF="$(instance_image_ref "$INSTANCE_ID")"
 
 START_TIME="$(timestamp_utc)"
 ERROR_LOG=""
@@ -426,11 +528,64 @@ if [[ "$STATUS" != "failed" ]]; then
   seed_plan_docs "$SPEC_PATH" "$PLAN_PATH" "$INSTANCE_ID" "$PROBLEM_STATEMENT"
 fi
 
-if [[ "$STATUS" != "failed" ]] && ! command -v codex >/dev/null 2>&1; then
+if [[ "$STATUS" != "failed" ]] && ! ensure_docker_available 2>"$IMAGE_PRECHECK_ERR_PATH"; then
   STATUS="failed"
   FAILURE_REASON_CODE="runtime_error"
-  FAILURE_REASON_DETAIL="codex command not found on PATH"
-  ERROR_LOG="codex not found"
+  FAILURE_REASON_DETAIL="docker command not found on PATH"
+  if [[ -f "$IMAGE_PRECHECK_ERR_PATH" ]]; then
+    ERROR_LOG="$(cat "$IMAGE_PRECHECK_ERR_PATH")"
+  fi
+fi
+
+if [[ "$STATUS" != "failed" ]] && ! check_instance_image_exists "$IMAGE_REF" 2>"$IMAGE_PRECHECK_ERR_PATH"; then
+  STATUS="failed"
+  FAILURE_REASON_CODE="missing_image"
+  FAILURE_REASON_DETAIL="Missing required instance image: ${IMAGE_REF}"
+  if [[ -f "$IMAGE_PRECHECK_ERR_PATH" ]]; then
+    ERROR_LOG="$(cat "$IMAGE_PRECHECK_ERR_PATH")"
+  fi
+fi
+
+if [[ "$STATUS" != "failed" ]]; then
+  set +e
+  container_has_codex "$IMAGE_REF" 2>"$IMAGE_PRECHECK_ERR_PATH"
+  CODEX_CHECK_EXIT="$?"
+  set -e
+
+  if [[ "$CODEX_CHECK_EXIT" -eq 1 ]]; then
+    if ! bootstrap_codex_into_image "$IMAGE_REF" 2>"$CODEX_BOOTSTRAP_ERR_PATH"; then
+      STATUS="failed"
+      FAILURE_REASON_CODE="codex_bootstrap_failed"
+      FAILURE_REASON_DETAIL="Failed to bootstrap codex in image: ${IMAGE_REF}"
+      if [[ -f "$CODEX_BOOTSTRAP_ERR_PATH" ]]; then
+        ERROR_LOG="$(cat "$CODEX_BOOTSTRAP_ERR_PATH")"
+      else
+        ERROR_LOG="codex bootstrap command failed for ${IMAGE_REF}"
+      fi
+    else
+      set +e
+      container_has_codex "$IMAGE_REF" 2>"$IMAGE_PRECHECK_ERR_PATH"
+      CODEX_CHECK_EXIT="$?"
+      set -e
+      if [[ "$CODEX_CHECK_EXIT" -ne 0 ]]; then
+        STATUS="failed"
+        FAILURE_REASON_CODE="codex_bootstrap_failed"
+        FAILURE_REASON_DETAIL="Codex still unavailable after bootstrap for image: ${IMAGE_REF}"
+        if [[ -f "$IMAGE_PRECHECK_ERR_PATH" ]]; then
+          ERROR_LOG="$(cat "$IMAGE_PRECHECK_ERR_PATH")"
+        else
+          ERROR_LOG="codex not detected after bootstrap for ${IMAGE_REF}"
+        fi
+      fi
+    fi
+  elif [[ "$CODEX_CHECK_EXIT" -ne 0 ]]; then
+    STATUS="failed"
+    FAILURE_REASON_CODE="runtime_error"
+    FAILURE_REASON_DETAIL="Failed while checking codex availability in image: ${IMAGE_REF}"
+    if [[ -f "$IMAGE_PRECHECK_ERR_PATH" ]]; then
+      ERROR_LOG="$(cat "$IMAGE_PRECHECK_ERR_PATH")"
+    fi
+  fi
 fi
 
 # Placeholder command declaration to lock the hard requirement for Phase 2 runtime execution.

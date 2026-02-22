@@ -46,7 +46,7 @@ Completed in this session:
   - run-level manifest creation/update at `<manifest_dir>/run_manifest.json`.
 - Current skeleton semantics:
   - valid invocation exits with code `20` and `status=incomplete` by design until Phase 2 runtime loop is implemented.
-  - if `codex` is unavailable on PATH, invocation exits non-zero with `status=failed`, `failure_reason_code=runtime_error`.
+  - runtime precheck failures now map to explicit reason codes (`missing_image`, `codex_bootstrap_failed`) before execute-loop work begins.
 - Phase 1 validation tests added at `tests/test_start_swebench.sh`.
 - Docs updated for current state at `docs/implementation/phase5-runner.md`.
 - Phase 2 prompt-preflight milestone completed:
@@ -61,10 +61,15 @@ Completed in this session:
   - metadata source defaults to `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`) with fixture override support via `SWE_BENCH_INSTANCES_FILE` for deterministic tests/dev runs.
   - per-instance seeded docs are written at `--output-dir/plans/SPECIFICATION.md` and `--output-dir/plans/EXECUTION_PLAN.md`.
   - tests now validate seeded docs and runtime_error handling for missing instance metadata.
-- Latest pushed implementation commit for this phase: `b101472`.
+- Phase 2 image/bootstrap precheck milestone completed:
+  - `scripts/start-swebench.sh` now enforces image availability for `sweb.eval.arm64.<instance>:latest` and maps failures to `status=failed`, `failure_reason_code=missing_image`.
+  - script now checks codex availability inside the instance image and runs bootstrap fallback when missing.
+  - bootstrap failures now map to `status=failed`, `failure_reason_code=codex_bootstrap_failed`.
+  - tests now include deterministic missing-image and bootstrap-failure regressions in `tests/test_start_swebench.sh`.
+- Latest pushed implementation commit before this milestone: `b101472`.
 
 Still not implemented:
-- Phase 2 runtime core remainder (container/image checks, codex bootstrap fallback, plan/execute/handoff loop, final classification semantics).
+- Phase 2 runtime core remainder (plan/execute/handoff loop, final classification semantics).
 - `scripts/run-swebench-batch.sh` (Phase 3).
 - `scripts/prepare-swebench-codex-images.sh` (Phase 4).
 - Full Phase 5 docs end-state describing finished batch + single runner behavior.
@@ -204,13 +209,13 @@ No open decisions currently.
 
 ## 10. Handoff Start Point
 1. Continue `swebench-eval-next-4as.1` (Phase 2 runtime core) in this order:
-   - container/image + codex bootstrap fallback (`missing_image`/`codex_bootstrap_failed` mapping),
    - execute-loop with `--max-loops` budget and terminal classification.
 2. Keep `scripts/start-swebench.sh` single-instance only; defer all batch behavior to `swebench-eval-next-4as.2`.
 3. First concrete implementation target:
-   - in `scripts/start-swebench.sh`, add image existence check for `sweb.eval.arm64.<instance>:latest` and map failures to `status=failed`, `failure_reason_code=missing_image`;
-   - add codex bootstrap fallback path and map failures to `status=failed`, `failure_reason_code=codex_bootstrap_failed`;
+   - in `scripts/start-swebench.sh`, implement plan/execute/handoff iteration with `--max-loops` budget handling;
+   - classify terminal state based on per-instance `plans/` placement (`archive` => success, `blocked` => failed/blocked, root => incomplete);
    - keep per-instance artifact contract unchanged (`.patch`, `.pred`, `.status.json` always emitted).
 4. Validation to add immediately with that change:
-   - extend `tests/test_start_swebench.sh` with deterministic cases for `missing_image` and `codex_bootstrap_failed`;
+   - extend `tests/test_start_swebench.sh` with deterministic cases for blocked and terminal incomplete classification;
+   - add a focused `--max-loops` budget regression (`--max-loops 1`);
    - run `bash -n scripts/start-swebench.sh tests/test_start_swebench.sh` and `tests/test_start_swebench.sh`.
