@@ -191,13 +191,14 @@ No open decisions currently.
 - Umbrella feature: `swebench-eval-next-4as` (in progress)
 - Remaining follow-ups:
   - `swebench-eval-next-4as.1` (Phase 2 runtime core)
+  - `swebench-eval-next-4as.1.1` (land tracked runtime prompt files under `ralph/prompts/`)
   - `swebench-eval-next-4as.2` (Phase 3 batch orchestrator)
   - `swebench-eval-next-4as.3` (Phase 4 image prep utility)
   - `swebench-eval-next-4as.4` (Phase 5 docs completion)
 
 ## 10. Handoff Start Point
-1. Start with `swebench-eval-next-4as.1` (Phase 2 runtime core); this is the active critical path.
-2. Implement in this order:
+1. Start with `swebench-eval-next-4as.1.1` to land tracked `ralph/prompts/{plan,execute,handoff}.md` in the repo tree; this unblocks fully spec-compliant runtime prompt preflight.
+2. Continue `swebench-eval-next-4as.1` (Phase 2 runtime core) in this order:
    - instance metadata load (`problem_statement`) and spec seeding,
    - container/image + codex bootstrap fallback,
    - execute-loop with `--max-loops` budget and terminal classification.
