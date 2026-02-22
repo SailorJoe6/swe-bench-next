@@ -93,6 +93,12 @@ Completed to date:
 - Phase 3 docs update completed:
   - updated `docs/implementation/phase5-runner.md` to document both single-instance and batch contracts.
   - updated docs indexes (`docs/README.md`, `docs/implementation/README.md`) for Phase 5 batch visibility.
+- Handoff checkpoint for next session:
+  - latest pushed Phase 3 commit is `0080484` on `origin/main`.
+  - regression scripts currently covering Phase 2/3 runner behavior:
+    - `tests/test_start_swebench.sh`
+    - `tests/test_run_swebench_batch.sh`
+  - next implementation task remains Phase 4 utility (`scripts/prepare-swebench-codex-images.sh`) before final docs completion.
 
 Still not implemented:
 - `scripts/prepare-swebench-codex-images.sh` (Phase 4).
