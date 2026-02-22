@@ -61,6 +61,7 @@ Completed in this session:
   - metadata source defaults to `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`) with fixture override support via `SWE_BENCH_INSTANCES_FILE` for deterministic tests/dev runs.
   - per-instance seeded docs are written at `--output-dir/plans/SPECIFICATION.md` and `--output-dir/plans/EXECUTION_PLAN.md`.
   - tests now validate seeded docs and runtime_error handling for missing instance metadata.
+- Latest pushed implementation commit for this phase: `b101472`.
 
 Still not implemented:
 - Phase 2 runtime core remainder (container/image checks, codex bootstrap fallback, plan/execute/handoff loop, final classification semantics).
@@ -206,3 +207,10 @@ No open decisions currently.
    - container/image + codex bootstrap fallback (`missing_image`/`codex_bootstrap_failed` mapping),
    - execute-loop with `--max-loops` budget and terminal classification.
 2. Keep `scripts/start-swebench.sh` single-instance only; defer all batch behavior to `swebench-eval-next-4as.2`.
+3. First concrete implementation target:
+   - in `scripts/start-swebench.sh`, add image existence check for `sweb.eval.arm64.<instance>:latest` and map failures to `status=failed`, `failure_reason_code=missing_image`;
+   - add codex bootstrap fallback path and map failures to `status=failed`, `failure_reason_code=codex_bootstrap_failed`;
+   - keep per-instance artifact contract unchanged (`.patch`, `.pred`, `.status.json` always emitted).
+4. Validation to add immediately with that change:
+   - extend `tests/test_start_swebench.sh` with deterministic cases for `missing_image` and `codex_bootstrap_failed`;
+   - run `bash -n scripts/start-swebench.sh tests/test_start_swebench.sh` and `tests/test_start_swebench.sh`.
