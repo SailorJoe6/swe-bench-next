@@ -49,12 +49,15 @@ Completed in this session:
   - if `codex` is unavailable on PATH, invocation exits non-zero with `status=failed`, `failure_reason_code=runtime_error`.
 - Phase 1 validation tests added at `tests/test_start_swebench.sh`.
 - Docs updated for current state at `docs/implementation/phase5-runner.md`.
+- Phase 2 prompt-preflight milestone completed:
+  - `scripts/start-swebench.sh` now hard-fails when any required runtime prompt file is missing.
+  - tests now cover both preflight failure and success behavior in isolated runner roots.
 - Prompt-path repo state note:
   - required runtime prompt location per spec is `ralph/prompts/{plan,execute,handoff}.md`.
-  - those concrete runtime prompt files are not present yet under `ralph/prompts/`; Phase 2 must add/migrate them before prompt preflight can pass.
+  - concrete runtime prompt files are still missing from the tracked repo tree and must be added in a follow-up tied to `swebench-eval-next-4as.1`.
 
 Still not implemented:
-- Phase 2 runtime core (prompt preflight, container/image checks, codex bootstrap fallback, spec-seed from `problem_statement`, plan/execute/handoff loop, final classification semantics).
+- Phase 2 runtime core remainder (container/image checks, codex bootstrap fallback, spec-seed from `problem_statement`, plan/execute/handoff loop, final classification semantics).
 - `scripts/run-swebench-batch.sh` (Phase 3).
 - `scripts/prepare-swebench-codex-images.sh` (Phase 4).
 - Full Phase 5 docs end-state describing finished batch + single runner behavior.
@@ -195,7 +198,6 @@ No open decisions currently.
 ## 10. Handoff Start Point
 1. Start with `swebench-eval-next-4as.1` (Phase 2 runtime core); this is the active critical path.
 2. Implement in this order:
-   - runtime prompt preflight against `ralph/prompts/{plan,execute,handoff}.md`,
    - instance metadata load (`problem_statement`) and spec seeding,
    - container/image + codex bootstrap fallback,
    - execute-loop with `--max-loops` budget and terminal classification.

@@ -7,6 +7,10 @@ DATASET_SPLIT="test"
 MODEL_NAME_OR_PATH="qwen3-coder-next-FP8,codex,ralph"
 CODEX_PROFILE="local"
 MAX_LOOPS_DEFAULT=50
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROMPTS_DIR="$REPO_ROOT/ralph/prompts"
+REQUIRED_PROMPTS=(plan.md execute.md handoff.md)
 
 INSTANCE_ID=""
 OUTPUT_DIR=""
@@ -42,6 +46,24 @@ timestamp_utc() {
 
 is_positive_integer() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+collect_missing_prompts() {
+  local missing=()
+  local prompt_file=""
+
+  for prompt_file in "${REQUIRED_PROMPTS[@]}"; do
+    if [[ ! -f "$PROMPTS_DIR/$prompt_file" ]]; then
+      missing+=("$PROMPTS_DIR/$prompt_file")
+    fi
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf '%s\n' "${missing[@]}"
+    return 1
+  fi
+
+  return 0
 }
 
 write_status_json() {
@@ -266,8 +288,16 @@ STATUS="incomplete"
 FAILURE_REASON_CODE="incomplete"
 FAILURE_REASON_DETAIL="Phase 1 skeleton complete: CLI contracts are implemented; runtime execution loop is pending."
 MODEL_PATCH=""
+MISSING_PROMPTS=""
 
-if ! command -v codex >/dev/null 2>&1; then
+if ! MISSING_PROMPTS="$(collect_missing_prompts)"; then
+  STATUS="failed"
+  FAILURE_REASON_CODE="runtime_error"
+  FAILURE_REASON_DETAIL="Missing required runtime prompt file(s) under ralph/prompts"
+  ERROR_LOG="$MISSING_PROMPTS"
+fi
+
+if [[ "$STATUS" != "failed" ]] && ! command -v codex >/dev/null 2>&1; then
   STATUS="failed"
   FAILURE_REASON_CODE="runtime_error"
   FAILURE_REASON_DETAIL="codex command not found on PATH"
