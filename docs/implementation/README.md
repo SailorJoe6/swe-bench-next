@@ -4,6 +4,7 @@ This folder contains technical implementation documentation for the SWE-Bench ev
 
 ## Documentation Index
 
+- **[Phase 5 Runner](phase5-runner.md)** - Current single-instance runner implementation (`start-swebench.sh`)
 - **[ARM64 Support](../arm64-support/README.md)** - Complete ARM64 implementation guide
 - **[Code Changes](../arm64-support/CHANGES.md)** - Detailed code modifications for ARM64
 - **[mvnd Fix](../arm64-support/mvnd-fix.md)** - Apache Maven ARM64 binary workaround
@@ -25,6 +26,7 @@ swebench-eval-next/
 2. **Phase 2**: Default Harness - Skipped (incompatible with custom vLLM)
 3. **Phase 3**: SWE-Agent - Agentic evaluation with ARM64 containers (in progress)
 4. **Phase 4**: mini-SWE-agent - Optional lightweight agent
+5. **Phase 5**: Ralph + Codex local runner workflow (in progress)
 
 ## See Also
 

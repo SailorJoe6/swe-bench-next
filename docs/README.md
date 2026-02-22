@@ -9,6 +9,7 @@ Welcome to the SWE-Bench Evaluation project documentation. This index provides q
 ## Implementation Details
 
 - **[Overview](implementation/README.md)** - Project architecture, phases, and scripts
+- **[Phase 5 Runner](implementation/phase5-runner.md)** - Current `start-swebench.sh` implementation state
 - **[ARM64 Support](arm64-support/README.md)** - Complete ARM64 implementation guide
 - **[ARM64 Quick Start](arm64-support/QUICKSTART.md)** - Quick start for ARM64 evaluations
 - **[Code Changes](arm64-support/CHANGES.md)** - Detailed code modifications for ARM64
