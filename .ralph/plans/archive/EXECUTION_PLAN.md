@@ -112,10 +112,7 @@ Completed to date:
   - added `docs/guides/quickstart.md` pointer to the Phase 5 runner workflow doc.
 
 Still not implemented:
-- Final acceptance review against spec criteria with validation-matrix execution results captured in this plan.
-- Closure sweep after acceptance review:
-  - close `swebench-eval-next-4as.6` and umbrella `swebench-eval-next-4as`,
-  - move `.ralph/plans/SPECIFICATION.md` and `.ralph/plans/EXECUTION_PLAN.md` to `.ralph/plans/archive/`.
+- None.
 
 ## 4. Execution Phases
 
@@ -243,20 +240,50 @@ Complete only when:
 No open decisions currently.
 
 ## 9. Beads Tracking
-- Umbrella feature: `swebench-eval-next-4as` (in progress)
-- Remaining follow-ups:
-  - `swebench-eval-next-4as.6` (final validation matrix + acceptance review)
+- Umbrella feature: `swebench-eval-next-4as` (closed)
+- Final follow-up task: `swebench-eval-next-4as.6` (closed)
 
 ## 10. Handoff Start Point
-1. Start `swebench-eval-next-4as.6` (final acceptance review).
-2. Run full validation matrix:
-   - `bash -n` checks for all three scripts.
-   - regression scripts:
-     - `tests/test_start_swebench.sh`
-     - `tests/test_run_swebench_batch.sh`
-     - `tests/test_prepare_swebench_codex_images.sh`
-   - `shellcheck` (if available).
-3. Record acceptance-criteria verification results against `.ralph/plans/SPECIFICATION.md` directly in this plan:
-   - for each criterion, note `pass/fail`,
-   - include evidence pointer (test name, output artifact, or script location).
-4. If all criteria are satisfied, close umbrella issue and archive plan/spec docs.
+1. Spec and plan are complete and archived.
+2. All acceptance criteria have passing evidence recorded in this plan.
+3. Continue from new planning docs if a follow-on specification is opened.
+
+## 11. Final Validation + Acceptance Review (2026-02-22)
+
+### 11.1 Validation Matrix Results
+
+Static checks:
+- `bash -n scripts/start-swebench.sh scripts/run-swebench-batch.sh scripts/prepare-swebench-codex-images.sh` -> PASS
+- `shellcheck scripts/start-swebench.sh scripts/run-swebench-batch.sh scripts/prepare-swebench-codex-images.sh` -> SKIPPED (`shellcheck` not installed in environment)
+
+Functional checks:
+- `tests/test_start_swebench.sh` -> PASS
+- `tests/test_run_swebench_batch.sh` -> PASS
+- `tests/test_prepare_swebench_codex_images.sh` -> PASS
+
+### 11.2 Acceptance Criteria Matrix
+
+1. PASS - `scripts/start-swebench.sh` enforces required `--instance-id` and `--output-dir`, supports optional `--manifest-dir` defaulting to `--output-dir` (script CLI parser + `tests/test_start_swebench.sh`).
+2. PASS - `scripts/run-swebench-batch.sh` invokes `start-swebench.sh` sequentially per instance (`scripts/run-swebench-batch.sh`, `tests/test_run_swebench_batch.sh`).
+3. PASS - runners reject profile/Claude overrides and execute Codex unattended with `-p local` (`scripts/start-swebench.sh`, `scripts/run-swebench-batch.sh`).
+4. PASS - `--max-loops` exists with default `50` and controls execute passes (`scripts/start-swebench.sh`, `tests/test_start_swebench.sh` max-loop regression).
+5. PASS - batch sorts instance IDs lexicographically before invocation (`collect_instance_ids` sort in batch script + ordering assertions in `tests/test_run_swebench_batch.sh`).
+6. PASS - per-instance state is under `--output-dir` (`plans/`, `logs/`, artifacts) and no `.ralph/` runtime writes exist (`scripts/start-swebench.sh`).
+7. PASS - `.patch`, `.pred`, `.status.json` are always written (`scripts/start-swebench.sh`, `tests/test_start_swebench.sh`).
+8. PASS - `.pred` always sets `model_name_or_path` to `qwen3-coder-next-FP8,codex,ralph` (`write_pred_json`, all runner tests).
+9. PASS - reason-code vocabulary is constrained to fixed values with `null` on success (`scripts/start-swebench.sh` classification branches + tests for success/failure/incomplete).
+10. PASS - missing required runtime prompts hard-fails before execution (`collect_missing_prompts` + `run_case_missing_runtime_prompts` test).
+11. PASS - blocked terminal plan state is hard-failed, no blocked prompt path (`classify_plan_state` + `run_case_blocked_terminal_classification` test).
+12. PASS - batch continues on per-instance failure and emits `predictions.jsonl` (`tests/test_run_swebench_batch.sh` continue-on-failure case).
+13. PASS - single runner does not emit run-level `predictions.jsonl`; batch builds it from per-instance `.pred` files (`scripts/start-swebench.sh`, `scripts/run-swebench-batch.sh`, batch tests).
+14. PASS - single runner always writes/updates manifest at `<manifest_dir>/run_manifest.json` with defaulting behavior (`scripts/start-swebench.sh`, default-manifest and failure-path tests).
+15. PASS - manual optional `scripts/prepare-swebench-codex-images.sh` exists and overwrites image tags in place (`docs/implementation/prepare-codex-images.md`, `tests/test_prepare_swebench_codex_images.sh`).
+16. PASS - top-level `docs/` documents both new scripts and workflow contracts (`docs/implementation/phase5-runner.md`, `docs/README.md`).
+17. PASS - batch passes instance output dir as exactly `<run_root>/<instance_id>` (`scripts/run-swebench-batch.sh`, ordering test invocation assertions).
+18. PASS - batch passes `--manifest-dir` as exactly `<run_root>` (`scripts/run-swebench-batch.sh`, ordering test invocation assertions).
+19. PASS - single runner writes/updates manifest for direct runs when `--manifest-dir` is omitted (`tests/test_start_swebench.sh` default manifest case).
+
+### 11.3 Final Outcome
+
+- All 19 specification acceptance criteria pass with test and script evidence.
+- No remaining implementation work exists for this spec/plan pair.
