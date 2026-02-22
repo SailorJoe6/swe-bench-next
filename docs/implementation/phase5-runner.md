@@ -20,6 +20,12 @@ The script currently implements **Phase 1 (single-instance runner skeleton)** pl
   - `ralph/prompts/execute.md`
   - `ralph/prompts/handoff.md`
   Missing any of these files hard-fails the invocation.
+- Loads instance metadata and `problem_statement` before execution:
+  - default source: `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`)
+  - test/dev override: `SWE_BENCH_INSTANCES_FILE=<json|jsonl>`
+- Seeds per-instance planning docs under `--output-dir/plans/`:
+  - `SPECIFICATION.md` (from `problem_statement`)
+  - `EXECUTION_PLAN.md` (seeded in-progress scaffold)
 - Runtime prompt assets are now tracked in-repo at:
   - `ralph/prompts/plan.md`
   - `ralph/prompts/execute.md`
@@ -38,10 +44,15 @@ Phase 1 is scaffolding-only, so instance execution is not implemented yet.
 
 Current behavior for valid invocations (with required runtime prompts present):
 
-- Writes artifacts and manifest with `status: "incomplete"`.
+- Writes seeded plan docs, artifacts, and manifest with `status: "incomplete"`.
 - Exits with code `20` to indicate runtime loop work is still pending.
 
 Current behavior when prompt preflight fails:
+
+- Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "runtime_error"`.
+- Exits with code `1`.
+
+Current behavior when metadata/problem statement loading fails:
 
 - Writes per-instance artifacts/manifest with `status: "failed"` and `failure_reason_code: "runtime_error"`.
 - Exits with code `1`.
@@ -61,6 +72,5 @@ scripts/start-swebench.sh \
 Remaining work from the plan includes:
 
 - Container image checks and codex bootstrap fallback.
-- Spec seeding from `problem_statement`.
 - Plan/execute/handoff runtime loop and terminal-state classification.
 - Final success/failed behavior and batch orchestrator integration.

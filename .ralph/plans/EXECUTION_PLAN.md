@@ -56,9 +56,14 @@ Completed in this session:
   - resolved `ralph` path tracking constraints by converting it from a gitlink entry to normal tracked files in this repository.
   - added tracked runtime prompts at `ralph/prompts/{plan,execute,handoff}.md`.
   - tests now include a repository-level prompt-availability regression for `scripts/start-swebench.sh`.
+- Phase 2 metadata-seeding milestone completed:
+  - `scripts/start-swebench.sh` now loads instance `problem_statement` metadata before runtime execution.
+  - metadata source defaults to `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`) with fixture override support via `SWE_BENCH_INSTANCES_FILE` for deterministic tests/dev runs.
+  - per-instance seeded docs are written at `--output-dir/plans/SPECIFICATION.md` and `--output-dir/plans/EXECUTION_PLAN.md`.
+  - tests now validate seeded docs and runtime_error handling for missing instance metadata.
 
 Still not implemented:
-- Phase 2 runtime core remainder (container/image checks, codex bootstrap fallback, spec-seed from `problem_statement`, plan/execute/handoff loop, final classification semantics).
+- Phase 2 runtime core remainder (container/image checks, codex bootstrap fallback, plan/execute/handoff loop, final classification semantics).
 - `scripts/run-swebench-batch.sh` (Phase 3).
 - `scripts/prepare-swebench-codex-images.sh` (Phase 4).
 - Full Phase 5 docs end-state describing finished batch + single runner behavior.
@@ -198,7 +203,6 @@ No open decisions currently.
 
 ## 10. Handoff Start Point
 1. Continue `swebench-eval-next-4as.1` (Phase 2 runtime core) in this order:
-   - instance metadata load (`problem_statement`) and spec seeding,
-   - container/image + codex bootstrap fallback,
+   - container/image + codex bootstrap fallback (`missing_image`/`codex_bootstrap_failed` mapping),
    - execute-loop with `--max-loops` budget and terminal classification.
 2. Keep `scripts/start-swebench.sh` single-instance only; defer all batch behavior to `swebench-eval-next-4as.2`.

@@ -6,6 +6,7 @@ DATASET_SUBSET="multilingual"
 DATASET_SPLIT="test"
 MODEL_NAME_OR_PATH="qwen3-coder-next-FP8,codex,ralph"
 CODEX_PROFILE="local"
+INSTANCE_FIXTURE_ENV_VAR="SWE_BENCH_INSTANCES_FILE"
 MAX_LOOPS_DEFAULT=50
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -64,6 +65,117 @@ collect_missing_prompts() {
   fi
 
   return 0
+}
+
+load_instance_problem_statement() {
+  local instance_id="$1"
+
+  python3 - "$instance_id" "$DATASET_NAME" "$DATASET_SUBSET" "$DATASET_SPLIT" "$INSTANCE_FIXTURE_ENV_VAR" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+instance_id, dataset_name, dataset_subset, dataset_split, fixture_env_var = sys.argv[1:]
+fixture_path = os.environ.get(fixture_env_var, "").strip()
+
+
+def load_fixture_records(path: str, env_var_name: str):
+    file_path = pathlib.Path(path)
+    if not file_path.exists():
+        raise RuntimeError(f"{env_var_name} path does not exist: {file_path}")
+
+    text = file_path.read_text(encoding="utf-8")
+    if file_path.suffix.lower() == ".jsonl":
+        records = []
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            row = line.strip()
+            if not row:
+                continue
+            try:
+                records.append(json.loads(row))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"invalid JSONL in {file_path} at line {line_number}: {exc.msg}") from exc
+        return records
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid JSON in {file_path}: {exc.msg}") from exc
+
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get("instances"), list):
+            return data["instances"]
+        return [data]
+
+    raise RuntimeError(f"unsupported fixture structure in {file_path}; expected JSON object, array, or JSONL")
+
+
+def lookup_problem_statement(records, target_instance_id: str):
+    for record in records:
+        if isinstance(record, dict) and record.get("instance_id") == target_instance_id:
+            problem_statement = record.get("problem_statement")
+            if not isinstance(problem_statement, str) or not problem_statement.strip():
+                raise RuntimeError(
+                    f"instance '{target_instance_id}' is missing a non-empty problem_statement"
+                )
+            return problem_statement.strip()
+    return None
+
+
+if fixture_path:
+    source = fixture_path
+    records = load_fixture_records(fixture_path, fixture_env_var)
+    statement = lookup_problem_statement(records, instance_id)
+else:
+    source = f"{dataset_name} [{dataset_subset}/{dataset_split}]"
+    try:
+        from datasets import load_dataset
+    except Exception as exc:  # pragma: no cover - dependency/runtime environment branch
+        raise RuntimeError(
+            "python package 'datasets' is required to load SWE-Bench metadata; "
+            f"install it or set {fixture_env_var}"
+        ) from exc
+
+    dataset = load_dataset(dataset_name, dataset_subset, split=dataset_split)
+    statement = lookup_problem_statement(dataset, instance_id)
+
+if statement is None:
+    raise RuntimeError(f"instance '{instance_id}' not found in {source}")
+
+sys.stdout.write(statement + "\n")
+PY
+}
+
+seed_plan_docs() {
+  local spec_path="$1"
+  local plan_path="$2"
+  local instance_id="$3"
+  local problem_statement="$4"
+
+  cat > "$spec_path" <<EOF
+# Specification: ${instance_id}
+
+## Source Instance
+- dataset: ${DATASET_NAME}
+- subset: ${DATASET_SUBSET}
+- split: ${DATASET_SPLIT}
+- instance_id: ${instance_id}
+
+## Problem Statement
+${problem_statement}
+EOF
+
+  cat > "$plan_path" <<EOF
+# Execution Plan: ${instance_id}
+
+## Status
+- state: in_progress
+- seeded_from: problem_statement
+- next_step: run plan prompt and execute-loop in future Phase 2 milestones
+EOF
 }
 
 write_status_json() {
@@ -281,6 +393,9 @@ STATUS_PATH="$OUTPUT_DIR/${INSTANCE_ID}.status.json"
 PRED_PATH="$OUTPUT_DIR/${INSTANCE_ID}.pred"
 PATCH_PATH="$OUTPUT_DIR/${INSTANCE_ID}.patch"
 MANIFEST_PATH="$MANIFEST_DIR/run_manifest.json"
+SPEC_PATH="$OUTPUT_DIR/plans/SPECIFICATION.md"
+PLAN_PATH="$OUTPUT_DIR/plans/EXECUTION_PLAN.md"
+METADATA_LOAD_ERR_PATH="$OUTPUT_DIR/logs/instance_metadata_error.log"
 
 START_TIME="$(timestamp_utc)"
 ERROR_LOG=""
@@ -289,12 +404,26 @@ FAILURE_REASON_CODE="incomplete"
 FAILURE_REASON_DETAIL="Phase 1 skeleton complete: CLI contracts are implemented; runtime execution loop is pending."
 MODEL_PATCH=""
 MISSING_PROMPTS=""
+PROBLEM_STATEMENT=""
 
 if ! MISSING_PROMPTS="$(collect_missing_prompts)"; then
   STATUS="failed"
   FAILURE_REASON_CODE="runtime_error"
   FAILURE_REASON_DETAIL="Missing required runtime prompt file(s) under ralph/prompts"
   ERROR_LOG="$MISSING_PROMPTS"
+fi
+
+if [[ "$STATUS" != "failed" ]] && ! PROBLEM_STATEMENT="$(load_instance_problem_statement "$INSTANCE_ID" 2>"$METADATA_LOAD_ERR_PATH")"; then
+  STATUS="failed"
+  FAILURE_REASON_CODE="runtime_error"
+  FAILURE_REASON_DETAIL="Failed to load instance metadata/problem_statement"
+  if [[ -f "$METADATA_LOAD_ERR_PATH" ]]; then
+    ERROR_LOG="$(cat "$METADATA_LOAD_ERR_PATH")"
+  fi
+fi
+
+if [[ "$STATUS" != "failed" ]]; then
+  seed_plan_docs "$SPEC_PATH" "$PLAN_PATH" "$INSTANCE_ID" "$PROBLEM_STATEMENT"
 fi
 
 if [[ "$STATUS" != "failed" ]] && ! command -v codex >/dev/null 2>&1; then

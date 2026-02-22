@@ -38,6 +38,15 @@ make_isolated_runner_root() {
   echo "$tmpdir"
 }
 
+write_instance_fixture() {
+  local fixture_path="$1"
+  local instance_id="$2"
+  local problem_statement="$3"
+  cat > "$fixture_path" <<EOF
+{"instance_id":"$instance_id","problem_statement":"$problem_statement"}
+EOF
+}
+
 write_required_prompts() {
   local root="$1"
   mkdir -p "$root/ralph/prompts"
@@ -78,13 +87,16 @@ run_case_default_manifest_and_artifacts() {
   local tmpdir
   local codex_bin
   local isolated_script
+  local instance_fixture
   tmpdir="$(make_isolated_runner_root)"
   codex_bin="$(make_fake_codex_bin)"
   isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
   write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "repo__issue-1" "Fix the broken parser edge-case in foo/bar."
 
   set +e
-  PATH="$codex_bin:$PATH" "$isolated_script" --instance-id repo__issue-1 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  PATH="$codex_bin:$PATH" SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id repo__issue-1 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
   local status=$?
   set -e
 
@@ -95,6 +107,8 @@ run_case_default_manifest_and_artifacts() {
   [[ -f "$tmpdir/out/repo__issue-1.status.json" ]] || fail "status file missing"
   [[ -f "$tmpdir/out/run_manifest.json" ]] || fail "manifest file missing at default manifest dir"
   [[ -f "$tmpdir/out/logs/codex_command.txt" ]] || fail "codex command lock file missing"
+  [[ -f "$tmpdir/out/plans/SPECIFICATION.md" ]] || fail "seeded SPECIFICATION.md missing"
+  [[ -f "$tmpdir/out/plans/EXECUTION_PLAN.md" ]] || fail "seeded EXECUTION_PLAN.md missing"
 
   python3 - "$tmpdir" <<'PY'
 import json
@@ -123,6 +137,15 @@ assert inst["failure_reason_code"] == "incomplete"
 assert manifest["counts"]["total"] == 1
 assert manifest["counts"]["incomplete"] == 1
 assert manifest["last_invocation"]["args"]["manifest_dir"] == str(out)
+
+spec_doc = (out / "plans" / "SPECIFICATION.md").read_text(encoding="utf-8")
+assert "# Specification: repo__issue-1" in spec_doc
+assert "Fix the broken parser edge-case in foo/bar." in spec_doc
+assert "dataset: SWE-bench/SWE-bench_Multilingual" in spec_doc
+
+exec_plan_doc = (out / "plans" / "EXECUTION_PLAN.md").read_text(encoding="utf-8")
+assert "# Execution Plan: repo__issue-1" in exec_plan_doc
+assert "seeded_from: problem_statement" in exec_plan_doc
 PY
 }
 
@@ -176,11 +199,14 @@ PY
 run_case_repo_runtime_prompts_available() {
   local tmpdir
   local codex_bin
+  local instance_fixture
   tmpdir="$(mktemp -d)"
   codex_bin="$(make_fake_codex_bin)"
+  instance_fixture="$tmpdir/instances.jsonl"
+  write_instance_fixture "$instance_fixture" "repo__issue-3" "Address the null handling bug in importer."
 
   set +e
-  PATH="$codex_bin:$PATH" "$SCRIPT" --instance-id repo__issue-3 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  PATH="$codex_bin:$PATH" SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$SCRIPT" --instance-id repo__issue-3 --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
   local status=$?
   set -e
 
@@ -201,10 +227,51 @@ assert "Missing required runtime prompt file(s)" not in status["failure_reason_d
 PY
 }
 
+run_case_missing_instance_metadata() {
+  local tmpdir
+  local codex_bin
+  local isolated_script
+  local instance_fixture
+  tmpdir="$(make_isolated_runner_root)"
+  codex_bin="$(make_fake_codex_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "repo__other-issue" "A different instance that should not match."
+
+  set +e
+  PATH="$codex_bin:$PATH" SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id repo__missing-issue --output-dir "$tmpdir/out" > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "1" "$status" "missing instance metadata should fail invocation"
+  rg -F -q -- "Failed to load instance metadata/problem_statement" /tmp/start-swebench-test.err || fail "missing-instance-metadata error text not found"
+
+  python3 - "$tmpdir" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+out = root / "out"
+
+status = json.loads((out / "repo__missing-issue.status.json").read_text(encoding="utf-8"))
+assert status["status"] == "failed"
+assert status["failure_reason_code"] == "runtime_error"
+assert "Failed to load instance metadata/problem_statement" in status["failure_reason_detail"]
+assert "not found" in status["error_log"]
+assert "repo__missing-issue" in status["error_log"]
+
+pred = json.loads((out / "repo__missing-issue.pred").read_text(encoding="utf-8"))
+assert pred["model_patch"] == ""
+PY
+}
+
 run_case_missing_required_args
 run_case_invalid_max_loops
 run_case_default_manifest_and_artifacts
 run_case_missing_runtime_prompts
 run_case_repo_runtime_prompts_available
+run_case_missing_instance_metadata
 
 echo "PASS: start-swebench phase1 tests"
