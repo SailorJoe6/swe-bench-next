@@ -66,7 +66,7 @@ Completed in this session:
   - script now checks codex availability inside the instance image and runs bootstrap fallback when missing.
   - bootstrap failures now map to `status=failed`, `failure_reason_code=codex_bootstrap_failed`.
   - tests now include deterministic missing-image and bootstrap-failure regressions in `tests/test_start_swebench.sh`.
-- Latest pushed implementation commit before this milestone: `b101472`.
+- Latest pushed implementation commit for the current Phase 2 baseline: `bb1a746`.
 
 Still not implemented:
 - Phase 2 runtime core remainder (plan/execute/handoff loop, final classification semantics).
