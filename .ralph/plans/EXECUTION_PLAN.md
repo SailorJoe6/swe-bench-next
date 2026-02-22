@@ -106,10 +106,13 @@ Completed to date:
     - `tests/test_start_swebench.sh`
     - `tests/test_run_swebench_batch.sh`
     - `tests/test_prepare_swebench_codex_images.sh`
-  - remaining implementation scope is Phase 5 docs completion + final acceptance review.
+- Phase 5 documentation migration milestone completed:
+  - rewrote `docs/implementation/phase5-runner.md` as final workflow contract documentation (single-instance, batch, outputs, failure vocabulary, classification, manifest behavior, and prediction/evaluation separation).
+  - updated documentation indexes in `docs/README.md` and `docs/implementation/README.md` to point at finalized Phase 5 docs.
+  - added `docs/guides/quickstart.md` pointer to the Phase 5 runner workflow doc.
 
 Still not implemented:
-- Full Phase 5 docs end-state describing finished batch + single runner behavior.
+- Final acceptance review against spec criteria with validation-matrix execution results captured in this plan.
 
 ## 4. Execution Phases
 
@@ -239,14 +242,16 @@ No open decisions currently.
 ## 9. Beads Tracking
 - Umbrella feature: `swebench-eval-next-4as` (in progress)
 - Remaining follow-ups:
-  - `swebench-eval-next-4as.4` (Phase 5 docs completion)
+  - `swebench-eval-next-4as.6` (final validation matrix + acceptance review)
 
 ## 10. Handoff Start Point
-1. Start `swebench-eval-next-4as.4` (Phase 5 docs completion).
-2. Complete top-level docs end-state for final phase5 workflow contracts:
-   - single-instance usage (`scripts/start-swebench.sh`)
-   - batch usage (`scripts/run-swebench-batch.sh`)
-   - manual image prep usage (`scripts/prepare-swebench-codex-images.sh`)
-   - artifact schemas (`.patch`, `.pred`, `.status.json`, `predictions.jsonl`, `run_manifest.json`)
-   - fixed failure code vocabulary and prediction/evaluation separation.
-3. Run full validation matrix (including all three regression scripts) and complete final acceptance review against spec criteria.
+1. Start `swebench-eval-next-4as.6` (final acceptance review).
+2. Run full validation matrix:
+   - `bash -n` checks for all three scripts.
+   - regression scripts:
+     - `tests/test_start_swebench.sh`
+     - `tests/test_run_swebench_batch.sh`
+     - `tests/test_prepare_swebench_codex_images.sh`
+   - `shellcheck` (if available).
+3. Record acceptance-criteria verification results against `.ralph/plans/SPECIFICATION.md`.
+4. If all criteria are satisfied, close umbrella issue and archive plan/spec docs.

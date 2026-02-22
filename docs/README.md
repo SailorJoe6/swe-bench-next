@@ -9,7 +9,7 @@ Welcome to the SWE-Bench Evaluation project documentation. This index provides q
 ## Implementation Details
 
 - **[Overview](implementation/README.md)** - Project architecture, phases, and scripts
-- **[Phase 5 Runner](implementation/phase5-runner.md)** - Current `start-swebench.sh` and `run-swebench-batch.sh` implementation state
+- **[Phase 5 Runner](implementation/phase5-runner.md)** - Final workflow contract for `start-swebench.sh` and `run-swebench-batch.sh`
 - **[Prepare Codex Images](implementation/prepare-codex-images.md)** - Manual utility for pre-injecting codex into SWE-Bench ARM64 images
 - **[ARM64 Support](arm64-support/README.md)** - Complete ARM64 implementation guide
 - **[ARM64 Quick Start](arm64-support/QUICKSTART.md)** - Quick start for ARM64 evaluations
@@ -38,6 +38,9 @@ docs/
 
 ### For New Users
 Start with the **[Quick Start](guides/quickstart.md)** guide.
+
+### For Phase 5 Runner Workflow
+Use **[Phase 5 Runner](implementation/phase5-runner.md)** for single-instance and batch prediction contracts, artifact schemas, and failure-code behavior.
 
 ### For ARM64 Users
 See **[ARM64 Quick Start](arm64-support/QUICKSTART.md)** for ARM64-specific setup.

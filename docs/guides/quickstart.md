@@ -2,6 +2,10 @@
 
 This guide covers the quick and dirty about how we set up and run predictions and evaluations for SWE-Bench Multilingual using Qwen3-Coder-Next-FP8 on DGX Spark (ARM64/aarch64).
 
+## Phase 5 Runner Note
+
+If you are using the current Ralph + Codex local workflow (`scripts/start-swebench.sh` and `scripts/run-swebench-batch.sh`), use **[docs/implementation/phase5-runner.md](../implementation/phase5-runner.md)** as the source of truth for CLI usage, output contracts, and failure semantics.
+
 ## Prerequisites
 
 ### Hardware

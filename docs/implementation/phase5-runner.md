@@ -1,65 +1,28 @@
-# Phase 5 Runner (Current State)
+# Phase 5 Runner Workflow
 
-This document describes the current implementation state of the active SWE-Bench Phase 5 runners.
-
-## Scripts
+This page documents the implemented SWE-Bench prediction workflow for:
 
 - `scripts/start-swebench.sh` (single-instance runner)
-- `scripts/run-swebench-batch.sh` (batch orchestrator)
-- `scripts/prepare-swebench-codex-images.sh` (manual codex image prep utility)
+- `scripts/run-swebench-batch.sh` (sequential batch orchestrator)
+- `scripts/prepare-swebench-codex-images.sh` (manual optional image prep helper)
 
-## Single-Instance Scope Implemented
+Prediction and evaluation are intentionally separate. The Phase 5 runners produce prediction artifacts only; evaluation is run later via SWE-Bench harness tooling.
 
-`scripts/start-swebench.sh` implements the full **Phase 2 single-instance runtime core**:
+## Hard Runtime Contracts
 
-- Requires `--instance-id <id>`.
-- Requires `--output-dir <path>`.
-- Supports optional `--manifest-dir <path>` (defaults to `--output-dir`).
-- Supports `--max-loops <n>` (default: `50`; positive integer validation).
-- Enforces Codex-only local profile contract with `codex -p local --dangerously-bypass-approvals-and-sandbox exec`.
-- Performs runtime prompt preflight for:
+- Codex-only execution path.
+- Unattended execution path only.
+- Fixed profile: `codex -p local`.
+- Runtime prompts loaded only from:
   - `ralph/prompts/plan.md`
   - `ralph/prompts/execute.md`
   - `ralph/prompts/handoff.md`
-- Loads instance metadata and `problem_statement` from:
-  - default dataset `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`)
-  - optional fixture override `SWE_BENCH_INSTANCES_FILE=<json|jsonl>`
-- Seeds per-instance planning docs under `--output-dir/plans/`:
-  - `SPECIFICATION.md`
-  - `EXECUTION_PLAN.md`
-- Performs image/bootstrap prechecks:
-  - validates `sweb.eval.arm64.<instance_id>:latest`
-  - checks codex inside image and attempts bootstrap fallback
-- Executes runtime phases:
-  - one `plan` pass
-  - execute loop (`execute` then `handoff`) up to `--max-loops`
-- Classifies final state using per-instance plan locations:
-  - `plans/archive/` with non-empty patch => `success`
-  - `plans/blocked/` => `failed` with `failure_reason_code: "blocked"`
-  - root plans after budget => `incomplete` with `failure_reason_code: "incomplete"`
-- Writes required per-instance artifacts:
-  - `<instance>.patch`
-  - `<instance>.pred`
-  - `<instance>.status.json`
-- Writes/updates run-level manifest:
-  - `<manifest_dir>/run_manifest.json`
+- Missing required prompt file is a hard-fail before instance execution.
+- Runtime mutable state is written under per-instance output directories only (not under `.ralph/`).
 
-### Exit Semantics
+## Single-Instance Runner: `start-swebench.sh`
 
-- `0` when status is `success`.
-- `1` when status is `failed`.
-- `20` when status is `incomplete`.
-
-### Failure Reason Mapping
-
-- Prompt/metadata/codex runtime failures => `runtime_error`
-- Missing image => `missing_image`
-- Codex bootstrap failure => `codex_bootstrap_failed`
-- Blocked terminal state => `blocked`
-- Loop budget exhaustion/non-terminal end state => `incomplete`
-- Success => `null`
-
-### Usage
+### CLI
 
 ```bash
 scripts/start-swebench.sh \
@@ -69,48 +32,160 @@ scripts/start-swebench.sh \
   [--max-loops 50]
 ```
 
-## Batch Scope Implemented
+- Required:
+  - `--instance-id`
+  - `--output-dir`
+- Optional:
+  - `--manifest-dir` (defaults to `--output-dir` when omitted)
+  - `--max-loops` (default: `50`, positive integer)
 
-`scripts/run-swebench-batch.sh` now implements **Phase 3 orchestration**:
+### Behavior
 
-- Resolves instance IDs from:
-  - default scope (`SWE-bench/SWE-bench_Multilingual`, `multilingual`, `test`), or
-  - optional `--instance-file <path>` subset.
-- Sorts resolved IDs lexicographically by `instance_id`.
-- Creates one timestamped run root:
-  - `results/phase5/ralph-codex-local/<timestamp>/`
-- Invokes `scripts/start-swebench.sh` sequentially per instance with:
-  - `--output-dir <run_root>/<instance_id>`
-  - `--manifest-dir <run_root>`
-  - `--max-loops <n>` (default 50, overridable on batch script)
-- Continues processing after per-instance failures.
-- Builds run-level `predictions.jsonl` by aggregating `<run_root>/<instance_id>/<instance_id>.pred`.
-- Leaves run-level manifest ownership to `scripts/start-swebench.sh`.
+For one invocation, the script:
 
-### Batch Usage
+1. Validates runtime prompts under `ralph/prompts/`.
+2. Loads instance `problem_statement` from:
+   - default dataset `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`), or
+   - `SWE_BENCH_INSTANCES_FILE` fixture override (`.json` or `.jsonl`).
+3. Seeds planning docs under `<output_dir>/plans/`:
+   - `SPECIFICATION.md`
+   - `EXECUTION_PLAN.md`
+4. Validates image `sweb.eval.arm64.<instance_id>:latest`.
+5. Ensures `codex` exists in image; attempts bootstrap fallback if missing.
+6. Runs one `plan` pass.
+7. Runs execute loop (`execute` then `handoff`) up to `--max-loops`.
+8. Classifies terminal state and writes artifacts.
+9. Writes/updates run manifest at `<manifest_dir>/run_manifest.json`.
+
+### Exit Codes
+
+- `0` for `status=success`
+- `1` for `status=failed`
+- `20` for `status=incomplete`
+
+## Batch Orchestrator: `run-swebench-batch.sh`
+
+### CLI
 
 ```bash
-scripts/run-swebench-batch.sh [--instance-file <path>] [--max-loops 50]
+scripts/run-swebench-batch.sh \
+  [--instance-file <path>] \
+  [--max-loops 50]
 ```
 
-## Manual Image Prep Utility (Phase 4)
+### Behavior
 
-`scripts/prepare-swebench-codex-images.sh` is implemented as a manual/optional helper.
+- Resolves scope from either:
+  - default `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`), or
+  - `--instance-file` subset input (`txt`, `json`, or `jsonl`).
+- Sorts `instance_id` values lexicographically.
+- Creates one run root:
+  - `results/phase5/ralph-codex-local/<timestamp>/`
+- Invokes `start-swebench.sh` once per instance, sequentially, with:
+  - `--output-dir <run_root>/<instance_id>`
+  - `--manifest-dir <run_root>`
+  - `--max-loops <n>`
+- Continues after per-instance failures.
+- Aggregates per-instance `<instance>.pred` files into:
+  - `<run_root>/predictions.jsonl`
+- Does not own manifest creation (manifest is written by `start-swebench.sh`).
 
-- Not auto-called by runtime scripts.
-- Injects codex binary/config into selected images.
-- Commits back to the same image tag (`sweb.eval.arm64.<instance_id>:latest`).
-- Supports selectors:
-  - `--instance-id`
-  - `--instance-file`
-  - `--image`
-  - `--all-local-images`
-- Supports `--dry-run` for target preflight.
+Batch process exit:
 
-See **[Prepare Codex Images](prepare-codex-images.md)** for full usage and behavior.
+- `0` when all instances are `success`
+- `1` when one or more instances are `failed`
+- `20` when none failed but one or more are `incomplete`
 
-## Notes
+## Output Contract
 
-Remaining plan work after this phase:
+### Per-Instance Artifacts
 
-- Top-level workflow docs end-state (Phase 5)
+Written under `<run_root>/<instance_id>/` (or directly under `--output-dir` for standalone runs):
+
+- `<instance_id>.patch`
+- `<instance_id>.pred`
+- `<instance_id>.status.json`
+
+`<instance_id>.pred` schema:
+
+```json
+{
+  "model_name_or_path": "qwen3-coder-next-FP8,codex,ralph",
+  "instance_id": "<instance_id>",
+  "model_patch": "<patch or empty string>"
+}
+```
+
+`<instance_id>.status.json` schema:
+
+```json
+{
+  "instance_id": "<instance_id>",
+  "status": "success|failed|incomplete",
+  "failure_reason_code": "missing_image|codex_bootstrap_failed|blocked|incomplete|runtime_error|null",
+  "failure_reason_detail": "<human readable detail>",
+  "error_log": "<captured stderr/log excerpt>"
+}
+```
+
+`failure_reason_code` vocabulary is fixed:
+
+- `missing_image`
+- `codex_bootstrap_failed`
+- `blocked`
+- `incomplete`
+- `runtime_error`
+- `null` (success only)
+
+### Run-Level Artifacts
+
+Under `<run_root>/`:
+
+- `run_manifest.json`
+- `predictions.jsonl` (batch script only)
+- `run_swebench_batch.log`
+- `instance_order.txt`
+
+`run_manifest.json` includes:
+
+- invocation args (`instance_id`, `output_dir`, `manifest_dir`, `max_loops`)
+- dataset scope (`name`, `subset`, `split`)
+- codex settings (`profile=local`, unattended flag)
+- `created_at` and `updated_at`
+- per-instance status records with:
+  - `status`
+  - `failure_reason_code`
+  - `failure_reason_detail`
+  - `error_log`
+  - `output_dir`
+  - per-instance start/end time
+- aggregate counts (`total`, `success`, `failed`, `incomplete`)
+
+## Classification Rules
+
+`start-swebench.sh` classifies using plan state + patch content:
+
+- `success`:
+  - `plans/archive/SPECIFICATION.md` exists
+  - `plans/archive/EXECUTION_PLAN.md` exists
+  - patch file is non-empty
+- `failed`:
+  - planning docs moved to `plans/blocked/`, or
+  - precheck/runtime hard failure (missing image, bootstrap failure, runtime error)
+- `incomplete`:
+  - root planning docs remain when loop budget ends, or
+  - archive exists with empty patch output
+
+Blocked mode is terminal for that instance; no separate blocked prompt flow exists.
+
+## Manual Image Prep Utility
+
+`scripts/prepare-swebench-codex-images.sh` is manual and optional. It pre-injects codex into selected local images and commits changes back to the same image tags. Runtime scripts do not auto-call it.
+
+See **[Prepare Codex Images](prepare-codex-images.md)** for selectors and examples.
+
+## Evaluation Separation
+
+Phase 5 runners only generate predictions (`.pred` files and aggregated `predictions.jsonl`). They do not run evaluation.
+
+Run evaluation as a separate step (for example via `scripts/run_test_eval.sh` or direct `python -m swebench.harness.run_evaluation`).

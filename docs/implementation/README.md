@@ -4,7 +4,7 @@ This folder contains technical implementation documentation for the SWE-Bench ev
 
 ## Documentation Index
 
-- **[Phase 5 Runner](phase5-runner.md)** - Current single-instance and batch runner implementation (`start-swebench.sh` + `run-swebench-batch.sh`)
+- **[Phase 5 Runner](phase5-runner.md)** - Final single-instance and batch runner contract (`start-swebench.sh` + `run-swebench-batch.sh`)
 - **[Prepare Codex Images](prepare-codex-images.md)** - Manual codex image prep utility (`prepare-swebench-codex-images.sh`)
 - **[ARM64 Support](../arm64-support/README.md)** - Complete ARM64 implementation guide
 - **[Code Changes](../arm64-support/CHANGES.md)** - Detailed code modifications for ARM64
@@ -25,9 +25,9 @@ swebench-eval-next/
 ### Evaluation Phases
 1. **Phase 1**: vLLM Setup - Deploy Qwen3-Coder-Next-FP8
 2. **Phase 2**: Default Harness - Skipped (incompatible with custom vLLM)
-3. **Phase 3**: SWE-Agent - Agentic evaluation with ARM64 containers (in progress)
+3. **Phase 3**: SWE-Agent - Agentic evaluation with ARM64 containers
 4. **Phase 4**: mini-SWE-agent - Optional lightweight agent
-5. **Phase 5**: Ralph + Codex local runner workflow (in progress)
+5. **Phase 5**: Ralph + Codex local runner workflow (implemented)
 
 ## See Also
 
