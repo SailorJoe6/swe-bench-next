@@ -1018,6 +1018,119 @@ assert "phase=execute" in inst["failure_reason_detail"]
 PY
 }
 
+run_case_prefers_repo_venv_python_for_metadata() {
+  local tmpdir
+  local codex_bin
+  local docker_bin
+  local isolated_script
+  local instance_fixture
+  local marker
+  tmpdir="$(make_isolated_runner_root)"
+  codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  marker="$tmpdir/venv-python-used.log"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "repo__venv-python-check" "Ensure start-swebench uses repo venv python."
+
+  mkdir -p "$tmpdir/venv/bin"
+  cat > "$tmpdir/venv/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${FAKE_VENV_PYTHON_MARKER:-}" ]]; then
+  printf 'used\n' >> "${FAKE_VENV_PYTHON_MARKER}"
+fi
+exec python3 "$@"
+EOF
+  chmod +x "$tmpdir/venv/bin/python3"
+
+  set +e
+  PATH="$docker_bin:$codex_bin:$PATH" \
+  FAKE_DOCKER_IMAGE_EXISTS=1 \
+  FAKE_CODEX_SCENARIO=stay_in_root \
+  FAKE_VENV_PYTHON_MARKER="$marker" \
+  SWE_BENCH_INSTANCES_FILE="$instance_fixture" \
+  "$isolated_script" --instance-id repo__venv-python-check --output-dir "$tmpdir/out" --max-loops 1 > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "20" "$status" "venv python preference case should run and end incomplete at loop limit"
+  [[ -s "$marker" ]] || fail "expected repo venv python marker to be written"
+}
+
+run_case_multilingual_dataset_mapping_matches_phase3() {
+  local tmpdir
+  local codex_bin
+  local docker_bin
+  local isolated_script
+  local fake_py_dir
+  local datasets_log
+  local instance_id
+  tmpdir="$(make_isolated_runner_root)"
+  codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  fake_py_dir="$tmpdir/fake_py"
+  datasets_log="$tmpdir/datasets-load.log"
+  instance_id="repo__dataset-mapping-check"
+  write_required_prompts "$tmpdir"
+
+  mkdir -p "$fake_py_dir"
+  cat > "$fake_py_dir/datasets.py" <<'EOF'
+import json
+import os
+import pathlib
+
+
+def load_dataset(name, *args, split=None, **kwargs):
+    log_path = pathlib.Path(os.environ["FAKE_DATASETS_LOG_PATH"])
+    payload = {
+        "name": name,
+        "args": list(args),
+        "split": split,
+    }
+    log_path.write_text(json.dumps(payload), encoding="utf-8")
+    return [
+        {
+            "instance_id": os.environ["FAKE_DATASETS_INSTANCE_ID"],
+            "problem_statement": "Problem statement from fake datasets module.",
+        }
+    ]
+EOF
+
+  set +e
+  PATH="$docker_bin:$codex_bin:$PATH" \
+  PYTHONPATH="$fake_py_dir" \
+  FAKE_DOCKER_IMAGE_EXISTS=1 \
+  FAKE_CODEX_SCENARIO=stay_in_root \
+  FAKE_DATASETS_LOG_PATH="$datasets_log" \
+  FAKE_DATASETS_INSTANCE_ID="$instance_id" \
+  "$isolated_script" --instance-id "$instance_id" --output-dir "$tmpdir/out" --max-loops 1 > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "20" "$status" "dataset mapping case should run and end incomplete at loop limit"
+
+  python3 - "$tmpdir" "$datasets_log" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+log_path = pathlib.Path(sys.argv[2])
+out = root / "out"
+
+payload = json.loads(log_path.read_text(encoding="utf-8"))
+assert payload["name"] == "swe-bench/SWE-Bench_Multilingual", payload
+assert payload["args"] == [], payload
+assert payload["split"] == "test", payload
+
+spec_doc = (out / "plans" / "SPECIFICATION.md").read_text(encoding="utf-8")
+assert "Problem statement from fake datasets module." in spec_doc
+PY
+}
+
 run_case_missing_required_args
 run_case_invalid_max_loops
 run_case_default_manifest_and_artifacts
@@ -1033,5 +1146,7 @@ run_case_mismatch_after_execute_fails
 run_case_max_loops_budget
 run_case_missing_instance_metadata
 run_case_mcp_phase_failure_diagnostics
+run_case_prefers_repo_venv_python_for_metadata
+run_case_multilingual_dataset_mapping_matches_phase3
 
 echo "PASS: start-swebench phase3 runtime tests"

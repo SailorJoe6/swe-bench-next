@@ -15,6 +15,9 @@ As of **February 25, 2026**:
 - Phase 5 script implementation and MCP-routed architecture closeout are complete.
 - Plan-defined validation is complete (`tests/test_start_swebench.sh`, `tests/test_run_swebench_batch.sh`, `tests/test_mcp_docker_exec_server.sh`).
 - One live SWE-Bench evaluation replay was completed for `google__gson-2024` using a Phase 5-produced prediction, and it resolved after eval namespace/image fixes.
+- A live single-instance integration run was executed for a known Phase 3 error ID (`preactjs__preact-2896`) to validate runner behavior on a previously failing instance.
+- MCP startup-timeout in that integration run was fixed (bridge transport compatibility bug; now supports line-delimited and `Content-Length` stdio JSON-RPC).
+- Metadata loading has been aligned with the Phase 3 multilingual source contract and now resolves multilingual subset loading through `swe-bench/SWE-Bench_Multilingual` (split-only load).
 - A full benchmark-scale Phase 5 run has not yet been executed.
 
 For top-level status context across phases, see **[Project Status](../project-status.md)**.
@@ -31,6 +34,9 @@ For top-level status context across phases, see **[Project Status](../project-st
   - runtime container `swebench-runtime-<sanitized-instance-id>`
   - fixed container workdir (default `/testbed`)
 - Shell command execution is routed into the runtime container through MCP tool `mcp-docker-exec`.
+- MCP bridge transport compatibility is required for Codex startup in this environment:
+  - newline-delimited JSON-RPC
+  - `Content-Length` framed JSON-RPC
 - Runtime prompts loaded only from:
   - `ralph/prompts/plan.md`
   - `ralph/prompts/execute.md`
@@ -75,8 +81,9 @@ For one invocation, the script:
 
 1. Validates runtime prompts under `ralph/prompts/`.
 2. Loads instance `problem_statement` from:
-   - default dataset `SWE-bench/SWE-bench_Multilingual` (`multilingual`, `test`), or
+   - default multilingual scope (`multilingual`, `test`) resolved to Phase 3-compatible dataset path `swe-bench/SWE-Bench_Multilingual`, or
    - `SWE_BENCH_INSTANCES_FILE` fixture override (`.json` or `.jsonl`).
+   - metadata loading and artifact JSON writes use `SWE_BENCH_PYTHON_BIN` if set, otherwise repo `venv/bin/python3` when available, otherwise `python3`.
 3. Seeds planning docs under `<output_dir>/plans/`:
    - `SPECIFICATION.md` only (contains only `## Problem Statement` from instance metadata)
 4. Validates image `sweb.eval.arm64.<instance_id>:latest`.

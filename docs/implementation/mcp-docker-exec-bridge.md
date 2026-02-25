@@ -10,6 +10,9 @@ The script is a minimal stdio MCP server used to route shell command execution i
 
 - Python stdlib only (no external package dependency)
 - Exposes exactly one tool: `mcp-docker-exec`
+- Supports both stdio JSON-RPC wire formats used in this repo:
+  - `Content-Length` framed messages
+  - newline-delimited JSON-RPC messages
 - Requires fixed startup bindings:
   - runtime container name (`--container-name` or `SWE_BENCH_RUNTIME_CONTAINER_NAME`)
   - container workdir (`--workdir` or `SWE_BENCH_RUNTIME_CONTAINER_WORKDIR` / `SWE_BENCH_CONTAINER_WORKDIR`)
@@ -30,6 +33,13 @@ As of February 25, 2026, this bridge is integrated into `scripts/start-swebench.
   - register a deterministic stdio MCP server binding to the run's runtime container/workdir
 - Shell command execution is routed through `mcp-docker-exec` into the prebound runtime container
 
+## Integration Findings (February 25, 2026)
+
+- A live Phase 5 single-instance integration run (`preactjs__preact-2896`) initially hit MCP startup timeouts even though the bridge process launched.
+- Root cause: transport mismatch. Codex MCP client used newline-delimited JSON-RPC startup messages while the bridge only accepted `Content-Length` framed messages.
+- Fix implemented: bridge now auto-detects and handles both transport formats.
+- Result: direct Codex + MCP startup now reaches `mcp ... ready` with the same runner-injected config pattern.
+
 ## Validation
 
 Phase 2 bridge behavior is covered by:
@@ -39,7 +49,7 @@ Phase 2 bridge behavior is covered by:
 The test suite validates:
 
 - startup binding validation failures
-- MCP `initialize`/`tools/list`/`tools/call` protocol flow
+- MCP `initialize`/`tools/list`/`tools/call` protocol flow for both transports
 - single-tool surface (`mcp-docker-exec`)
 - exact docker exec argument path
 - passthrough of `exit_code`, `stdout`, and `stderr`

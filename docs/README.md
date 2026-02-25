@@ -10,8 +10,8 @@ Welcome to the SWE-Bench Evaluation project documentation. This index provides q
 ## Implementation Details
 
 - **[Overview](implementation/README.md)** - Project architecture, phases, and scripts
-- **[Phase 5 Runner](implementation/phase5-runner.md)** - Implemented workflow contract for `start-swebench.sh` and `run-swebench-batch.sh`
-- **[MCP Docker Exec Bridge](implementation/mcp-docker-exec-bridge.md)** - Phase 2 stdlib MCP server contract for container-routed shell execution
+- **[Phase 5 Runner](implementation/phase5-runner.md)** - Implemented workflow contract for `start-swebench.sh` and `run-swebench-batch.sh`, plus live integration findings and current known gaps
+- **[MCP Docker Exec Bridge](implementation/mcp-docker-exec-bridge.md)** - Phase 2 stdlib MCP server contract for container-routed shell execution, including transport compatibility details from live integration
 - **[Codex Local Bridge](implementation/codex-local-bridge.md)** - Required LiteLLM + vLLM stack for `codex -p local`
 - **[Prepare Codex Images](implementation/prepare-codex-images.md)** - Manual utility for pre-injecting codex into SWE-Bench ARM64 images
 - **[ARM64 Support](arm64-support/README.md)** - Complete ARM64 implementation guide

@@ -7,11 +7,19 @@ DATASET_SPLIT="test"
 MODEL_NAME_OR_PATH="qwen3-coder-next-FP8,codex,ralph"
 CODEX_PROFILE="local"
 CODEX_BIN="${CODEX_BIN:-codex}"
+PYTHON_BIN="${SWE_BENCH_PYTHON_BIN:-}"
 MCP_BRIDGE_SERVER_NAME="swebench_docker_exec"
 INSTANCE_FIXTURE_ENV_VAR="SWE_BENCH_INSTANCES_FILE"
 MAX_LOOPS_DEFAULT=50
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -z "$PYTHON_BIN" ]]; then
+  if [[ -x "$REPO_ROOT/venv/bin/python3" ]]; then
+    PYTHON_BIN="$REPO_ROOT/venv/bin/python3"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 MCP_BRIDGE_SCRIPT="$REPO_ROOT/scripts/mcp-docker-exec-server.py"
 PROMPTS_DIR="$REPO_ROOT/ralph/prompts"
 REQUIRED_PROMPTS=(plan.md execute.md handoff.md)
@@ -92,6 +100,15 @@ ensure_docker_available() {
 check_instance_image_exists() {
   local image_ref="$1"
   docker image inspect "$image_ref" >/dev/null
+}
+
+ensure_python_available() {
+  if [[ "$PYTHON_BIN" == */* ]]; then
+    [[ -x "$PYTHON_BIN" ]]
+    return
+  fi
+
+  command -v "$PYTHON_BIN" >/dev/null 2>&1
 }
 
 sanitize_instance_id_for_container_name() {
@@ -202,7 +219,7 @@ extract_codex_session_id() {
 load_instance_problem_statement() {
   local instance_id="$1"
 
-  python3 - "$instance_id" "$DATASET_NAME" "$DATASET_SUBSET" "$DATASET_SPLIT" "$INSTANCE_FIXTURE_ENV_VAR" <<'PY'
+  "$PYTHON_BIN" - "$instance_id" "$DATASET_NAME" "$DATASET_SUBSET" "$DATASET_SPLIT" "$INSTANCE_FIXTURE_ENV_VAR" <<'PY'
 import json
 import os
 import pathlib
@@ -257,12 +274,32 @@ def lookup_problem_statement(records, target_instance_id: str):
     return None
 
 
+def resolve_dataset_path(dataset_name: str, dataset_subset: str) -> str:
+    subset = dataset_subset.strip().lower()
+    subset_mapping = {
+        "full": "princeton-nlp/SWE-Bench",
+        "verified": "princeton-nlp/SWE-Bench_Verified",
+        "lite": "princeton-nlp/SWE-Bench_Lite",
+        "multimodal": "princeton-nlp/SWE-Bench_Multimodal",
+        "multilingual": "swe-bench/SWE-Bench_Multilingual",
+    }
+    if subset in subset_mapping:
+        return subset_mapping[subset]
+
+    normalized_aliases = {
+        "swe-bench/swe-bench_multilingual": "swe-bench/SWE-Bench_Multilingual",
+    }
+    normalized_name = dataset_name.strip().lower()
+    return normalized_aliases.get(normalized_name, dataset_name)
+
+
 if fixture_path:
     source = fixture_path
     records = load_fixture_records(fixture_path, fixture_env_var)
     statement = lookup_problem_statement(records, instance_id)
 else:
-    source = f"{dataset_name} [{dataset_subset}/{dataset_split}]"
+    resolved_dataset_path = resolve_dataset_path(dataset_name, dataset_subset)
+    source = f"{resolved_dataset_path} [{dataset_split}]"
     try:
         from datasets import load_dataset
     except Exception as exc:  # pragma: no cover - dependency/runtime environment branch
@@ -271,7 +308,7 @@ else:
             f"install it or set {fixture_env_var}"
         ) from exc
 
-    dataset = load_dataset(dataset_name, dataset_subset, split=dataset_split)
+    dataset = load_dataset(resolved_dataset_path, split=dataset_split)
     statement = lookup_problem_statement(dataset, instance_id)
 
 if statement is None:
@@ -299,7 +336,7 @@ write_status_json() {
   local failure_reason_detail="$5"
   local error_log="$6"
 
-  python3 - "$status_path" "$instance_id" "$status" "$failure_reason_code" "$failure_reason_detail" "$error_log" <<'PY'
+  "$PYTHON_BIN" - "$status_path" "$instance_id" "$status" "$failure_reason_code" "$failure_reason_detail" "$error_log" <<'PY'
 import json
 import pathlib
 import sys
@@ -325,7 +362,7 @@ write_pred_json() {
   local instance_id="$2"
   local model_patch="$3"
 
-  python3 - "$pred_path" "$instance_id" "$MODEL_NAME_OR_PATH" "$model_patch" <<'PY'
+  "$PYTHON_BIN" - "$pred_path" "$instance_id" "$MODEL_NAME_OR_PATH" "$model_patch" <<'PY'
 import json
 import pathlib
 import sys
@@ -355,7 +392,7 @@ update_manifest() {
   local error_log="$8"
   local output_dir="$9"
 
-  python3 - "$manifest_path" "$instance_id" "$start_time" "$end_time" "$status" "$failure_reason_code" "$failure_reason_detail" "$error_log" "$output_dir" "$DATASET_NAME" "$DATASET_SUBSET" "$DATASET_SPLIT" "$CODEX_PROFILE" "$MAX_LOOPS" <<'PY'
+  "$PYTHON_BIN" - "$manifest_path" "$instance_id" "$start_time" "$end_time" "$status" "$failure_reason_code" "$failure_reason_detail" "$error_log" "$output_dir" "$DATASET_NAME" "$DATASET_SUBSET" "$DATASET_SPLIT" "$CODEX_PROFILE" "$MAX_LOOPS" <<'PY'
 import json
 import pathlib
 import sys
@@ -754,6 +791,13 @@ if ! MISSING_PROMPTS="$(collect_missing_prompts)"; then
   FAILURE_REASON_CODE="runtime_error"
   FAILURE_REASON_DETAIL="Missing required runtime prompt file(s) under ralph/prompts"
   ERROR_LOG="$MISSING_PROMPTS"
+fi
+
+if [[ "$STATUS" != "failed" ]] && ! ensure_python_available; then
+  STATUS="failed"
+  FAILURE_REASON_CODE="runtime_error"
+  FAILURE_REASON_DETAIL="Python interpreter unavailable for runner metadata/artifact operations"
+  ERROR_LOG="$PYTHON_BIN"
 fi
 
 if [[ "$STATUS" != "failed" ]] && ! PROBLEM_STATEMENT="$(load_instance_problem_statement "$INSTANCE_ID" 2>"$METADATA_LOAD_ERR_PATH")"; then
