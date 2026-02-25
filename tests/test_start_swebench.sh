@@ -949,6 +949,75 @@ assert pred["model_patch"] == ""
 PY
 }
 
+run_case_mcp_phase_failure_diagnostics() {
+  local tmpdir
+  local codex_bin
+  local docker_bin
+  local isolated_script
+  local instance_fixture
+  local instance_id
+  tmpdir="$(make_isolated_runner_root)"
+  codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  instance_id="Repo__MCP-Failure@@Ctx"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "$instance_id" "Verify MCP failure diagnostics include execution context."
+
+  set +e
+  PATH="$docker_bin:$codex_bin:$PATH" FAKE_DOCKER_IMAGE_EXISTS=1 FAKE_CODEX_SCENARIO=stay_in_root FAKE_CODEX_FAIL_PHASE=execute SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id "$instance_id" --output-dir "$tmpdir/out" --max-loops 1 > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "1" "$status" "execute MCP-path failure should return exit 1"
+  rg -F -q -- "Execute prompt failed" /tmp/start-swebench-test.err || fail "execute-phase failure text not found"
+
+  python3 - "$tmpdir" "$instance_id" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+instance_id = sys.argv[2]
+out = root / "out"
+
+status = json.loads((out / f"{instance_id}.status.json").read_text(encoding="utf-8"))
+assert status["status"] == "failed"
+assert status["failure_reason_code"] == "runtime_error"
+
+detail = status["failure_reason_detail"]
+assert "phase=execute" in detail
+assert "pass=1" in detail
+assert "workdir=/testbed" in detail
+assert "mcp_server=swebench_docker_exec" in detail
+
+prefix = "swebench-runtime-"
+max_len = 63
+sanitized = re.sub(r"[^a-z0-9_.-]+", "-", instance_id.lower())
+sanitized = re.sub(r"-+", "-", sanitized).strip("-")
+if not sanitized:
+    sanitized = "instance"
+suffix_max = max_len - len(prefix)
+sanitized = sanitized[:suffix_max].strip("-")
+if not sanitized:
+    sanitized = "instance"
+expected_runtime_name = prefix + sanitized
+assert f"runtime_container={expected_runtime_name}" in detail, detail
+
+error_log = status["error_log"]
+assert "[codex_execute.log tail]" in error_log
+assert "fake codex forced failure for phase: execute" in error_log
+
+manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
+inst = manifest["instances"][instance_id]
+assert inst["status"] == "failed"
+assert inst["failure_reason_code"] == "runtime_error"
+assert "phase=execute" in inst["failure_reason_detail"]
+PY
+}
+
 run_case_missing_required_args
 run_case_invalid_max_loops
 run_case_default_manifest_and_artifacts
@@ -963,5 +1032,6 @@ run_case_success_archive_classification
 run_case_mismatch_after_execute_fails
 run_case_max_loops_budget
 run_case_missing_instance_metadata
+run_case_mcp_phase_failure_diagnostics
 
 echo "PASS: start-swebench phase3 runtime tests"

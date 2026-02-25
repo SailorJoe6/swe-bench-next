@@ -206,6 +206,9 @@ Under `<run_root>/`:
 - `failed`:
   - precheck/runtime hard failure (missing image or runtime error), or
   - execute finished without patch and root planning docs are no longer both present (mismatch state)
+  - MCP-routed plan/execute/handoff command failures remain `runtime_error` and include explicit context in `failure_reason_detail`:
+    - `phase`, `pass`, `runtime_container`, `workdir`, `mcp_server`
+    - `error_log` includes any immediate phase stderr plus a tail excerpt from `logs/codex_<phase>.log`
 - `incomplete`:
   - root planning docs remain and execute-pass budget is exhausted without a patch
 

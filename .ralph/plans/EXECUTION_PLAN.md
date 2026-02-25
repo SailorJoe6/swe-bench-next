@@ -22,9 +22,9 @@ Audit date: 2026-02-25
 | 7. Bridge executes only in prebound container/workdir | Met | `scripts/mcp-docker-exec-server.py` requires startup bindings and always executes `docker exec -i -w <workdir> <container> /bin/sh -lc <command>` |
 | 8. Bridge returns exact `exit_code`, `stdout`, `stderr` from `docker exec` path | Met | `scripts/mcp-docker-exec-server.py` returns raw `stdout`/`stderr` and exact exit code in structured payload |
 | 9. Existing Phase 5 artifacts/status schema unchanged | Met | Current outputs and status/manifest schema already match Phase 5 contract |
-| 10. MCP-path failures map to `runtime_error` with explicit details | Not met | MCP path is active, but diagnostics/failure-detail hardening for MCP startup/routing/container-exec remains tracked in Phase 4 (`swebench-eval-next-p8m`) |
+| 10. MCP-path failures map to `runtime_error` with explicit details | Met | `scripts/start-swebench.sh` now stamps MCP phase context (`phase/pass/runtime_container/workdir/mcp_server`) into `failure_reason_detail` and captures `codex_<phase>.log` tails into `error_log` on plan/execute/handoff failures |
 | 11. `run-swebench-batch.sh` user-facing contract unchanged | Met | Current batch CLI/behavior already matches frozen contract |
-| 12. Docs and tests updated for new architecture | Not met | Runner rewiring test coverage/docs were partially updated, but full failure-mapping tests and broad docs reconciliation remain in Phase 5 (`swebench-eval-next-p8m`) |
+| 12. Docs and tests updated for new architecture | Partially met | `tests/test_start_swebench.sh` now covers MCP-phase failure diagnostics and `docs/implementation/phase5-runner.md` documents the behavior; broader index/status reconciliation remains in Phase 5 (`swebench-eval-next-p8m`) |
 
 ### 2.2 Baseline Validation Snapshot
 
@@ -240,4 +240,4 @@ Current sequencing state:
 1. Phase 1 complete
 2. Phase 2 complete
 3. Phase 3 complete
-4. Next active target: Phase 4/5 (`swebench-eval-next-p8m`)
+4. Next active target: remaining Phase 5 docs/status reconciliation (`swebench-eval-next-p8m`)

@@ -446,6 +446,50 @@ codex_phase_log_path() {
   echo "$OUTPUT_DIR/logs/codex_${phase}.log"
 }
 
+phase_failure_context() {
+  local phase="$1"
+  local pass_index="$2"
+  local runtime_container="${RUNTIME_CONTAINER_NAME:-<uninitialized>}"
+
+  printf 'phase=%s pass=%s runtime_container=%s workdir=%s mcp_server=%s' \
+    "$phase" "$pass_index" "$runtime_container" "$CONTAINER_WORKDIR" "$MCP_BRIDGE_SERVER_NAME"
+}
+
+collect_phase_failure_error_log() {
+  local phase="$1"
+  local runtime_err_path="$2"
+  local phase_log=""
+  local phase_log_tail=""
+  local combined=""
+
+  if [[ -f "$runtime_err_path" ]] && [[ -s "$runtime_err_path" ]]; then
+    combined="$(cat "$runtime_err_path")"
+  fi
+
+  phase_log="$(codex_phase_log_path "$phase")"
+  if [[ -f "$phase_log" ]] && [[ -s "$phase_log" ]]; then
+    phase_log_tail="$(tail -n 200 "$phase_log")"
+    if [[ -n "$combined" ]]; then
+      combined+=$'\n'
+    fi
+    combined+="[codex_${phase}.log tail]"$'\n'"${phase_log_tail}"
+  fi
+
+  printf '%s' "$combined"
+}
+
+set_mcp_phase_failure() {
+  local phase="$1"
+  local pass_index="$2"
+  local message="$3"
+  local runtime_err_path="$4"
+
+  STATUS="failed"
+  FAILURE_REASON_CODE="runtime_error"
+  FAILURE_REASON_DETAIL="${message} ($(phase_failure_context "$phase" "$pass_index"))."
+  ERROR_LOG="$(collect_phase_failure_error_log "$phase" "$runtime_err_path")"
+}
+
 toml_quote_string() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -776,12 +820,7 @@ if [[ "$STATUS" != "failed" ]]; then
 
     if [[ "$LOOP_STATE" == "spec_only" ]]; then
       if ! run_codex_phase "plan" "0" "$PLAN_PROMPT_PATH" 2>"$RUNTIME_ERR_PATH"; then
-        STATUS="failed"
-        FAILURE_REASON_CODE="runtime_error"
-        FAILURE_REASON_DETAIL="Plan prompt execution failed for ${INSTANCE_ID}."
-        if [[ -f "$RUNTIME_ERR_PATH" ]]; then
-          ERROR_LOG="$(cat "$RUNTIME_ERR_PATH")"
-        fi
+        set_mcp_phase_failure "plan" "0" "Plan prompt execution failed for ${INSTANCE_ID}" "$RUNTIME_ERR_PATH"
         break
       fi
 
@@ -816,12 +855,7 @@ if [[ "$STATUS" != "failed" ]]; then
     EXECUTE_PASSES_RUN="$pass"
 
     if ! run_codex_phase "execute" "$pass" "$EXECUTE_PROMPT_PATH" 2>"$RUNTIME_ERR_PATH"; then
-      STATUS="failed"
-      FAILURE_REASON_CODE="runtime_error"
-      FAILURE_REASON_DETAIL="Execute prompt failed on pass ${pass} for ${INSTANCE_ID}."
-      if [[ -f "$RUNTIME_ERR_PATH" ]]; then
-        ERROR_LOG="$(cat "$RUNTIME_ERR_PATH")"
-      fi
+      set_mcp_phase_failure "execute" "$pass" "Execute prompt failed for ${INSTANCE_ID}" "$RUNTIME_ERR_PATH"
       break
     fi
 
@@ -836,18 +870,13 @@ if [[ "$STATUS" != "failed" ]]; then
       if [[ -z "$EXECUTE_SESSION_ID" ]]; then
         STATUS="failed"
         FAILURE_REASON_CODE="runtime_error"
-        FAILURE_REASON_DETAIL="Unable to resolve execute session id for handoff resume on pass ${pass} for ${INSTANCE_ID}."
+        FAILURE_REASON_DETAIL="Unable to resolve execute session id for handoff resume for ${INSTANCE_ID} ($(phase_failure_context "execute" "$pass"))."
         ERROR_LOG="Missing execute session id in $(codex_phase_log_path "execute")"
         break
       fi
 
       if ! run_codex_phase "handoff" "$pass" "$HANDOFF_PROMPT_PATH" "$EXECUTE_SESSION_ID" 2>"$RUNTIME_ERR_PATH"; then
-        STATUS="failed"
-        FAILURE_REASON_CODE="runtime_error"
-        FAILURE_REASON_DETAIL="Handoff prompt failed on execute pass ${pass} for ${INSTANCE_ID}."
-        if [[ -f "$RUNTIME_ERR_PATH" ]]; then
-          ERROR_LOG="$(cat "$RUNTIME_ERR_PATH")"
-        fi
+        set_mcp_phase_failure "handoff" "$pass" "Handoff prompt failed for ${INSTANCE_ID}" "$RUNTIME_ERR_PATH"
         break
       fi
       continue
