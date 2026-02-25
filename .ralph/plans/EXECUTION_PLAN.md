@@ -17,14 +17,14 @@ Audit date: 2026-02-25
 | 2. Runtime container uses `swebench-runtime-<sanitized-instance-id>` naming | Met | `scripts/start-swebench.sh` now computes deterministic `swebench-runtime-<sanitized-instance-id>` names |
 | 3. Runner force-removes same-name stale container before create | Met | `scripts/start-swebench.sh` now does `docker rm -f <runtime_name>` before `docker create --name <runtime_name> ...` |
 | 4. Built-in Codex shell disabled in runner invocation path | Not met | Codex invoked without shell disable overrides |
-| 5. Minimal stdio MCP bridge launched per run and required | Not met | No MCP bridge script/config in repo or runner invocation |
-| 6. Bridge exposes only `mcp-docker-exec` | Not met | Bridge does not exist yet |
-| 7. Bridge executes only in prebound container/workdir | Not met | Bridge does not exist yet |
-| 8. Bridge returns exact `exit_code`, `stdout`, `stderr` from `docker exec` path | Not met | Bridge does not exist yet |
+| 5. Minimal stdio MCP bridge launched per run and required | Not met | Repo-local bridge script exists, but `scripts/start-swebench.sh` does not launch/configure MCP yet |
+| 6. Bridge exposes only `mcp-docker-exec` | Met | `scripts/mcp-docker-exec-server.py` exposes exactly one tool (`mcp-docker-exec`) via `tools/list` |
+| 7. Bridge executes only in prebound container/workdir | Met | `scripts/mcp-docker-exec-server.py` requires startup bindings and always executes `docker exec -i -w <workdir> <container> /bin/sh -lc <command>` |
+| 8. Bridge returns exact `exit_code`, `stdout`, `stderr` from `docker exec` path | Met | `scripts/mcp-docker-exec-server.py` returns raw `stdout`/`stderr` and exact exit code in structured payload |
 | 9. Existing Phase 5 artifacts/status schema unchanged | Met | Current outputs and status/manifest schema already match Phase 5 contract |
 | 10. MCP-path failures map to `runtime_error` with explicit details | Not met | No MCP path implemented yet |
 | 11. `run-swebench-batch.sh` user-facing contract unchanged | Met | Current batch CLI/behavior already matches frozen contract |
-| 12. Docs and tests updated for new architecture | Not met | Phase 1 docs/tests were updated for deterministic naming + no-bootstrap path; MCP-path coverage remains pending |
+| 12. Docs and tests updated for new architecture | Not met | Phase 2 bridge tests added (`tests/test_mcp_docker_exec_server.sh`), but runner MCP rewiring/failure mapping docs/tests remain pending |
 
 ### 2.2 Baseline Validation Snapshot
 
@@ -33,22 +33,21 @@ Current regression scripts pass (checkpoint after Phase 1 refactor):
 - `bash tests/test_start_swebench.sh` -> PASS
 - `bash tests/test_run_swebench_batch.sh` -> PASS
 - `bash tests/test_prepare_swebench_codex_images.sh` -> PASS
+- `bash tests/test_mcp_docker_exec_server.sh` -> PASS
 
 ### 2.3 Handoff Checkpoint (2026-02-25)
 
-- Last implementation commit for this plan: `1bd9bdd` (`main`, pushed to `origin/main`)
+- Last implementation commit before this checkpoint: `1bd9bdd` (`main`, pushed to `origin/main`)
 - Phase 1 status: complete (no-bootstrap normal path + deterministic runtime naming/collision cleanup)
+- Phase 2 status: complete (stdlib MCP bridge server + fake-docker MCP protocol tests)
 - Remaining plan work is tracked in beads:
-  - `swebench-eval-next-c6b` (Phase 2 MCP bridge server)
   - `swebench-eval-next-6kd` (Phase 3 host-run Codex + MCP-only invocation rewiring)
   - `swebench-eval-next-p8m` (Phase 4/5 failure mapping + MCP-path tests/docs)
 - Dependency chain in beads:
-  - `swebench-eval-next-c6b` blocks `swebench-eval-next-6kd`
   - `swebench-eval-next-6kd` blocks `swebench-eval-next-p8m`
 - Recommended pickup order:
-  1. `swebench-eval-next-c6b`
-  2. `swebench-eval-next-6kd`
-  3. `swebench-eval-next-p8m`
+  1. `swebench-eval-next-6kd`
+  2. `swebench-eval-next-p8m`
 
 ## 3. Scope Guardrails
 
@@ -113,6 +112,8 @@ Tasks:
 Definition of done:
 
 - MCP bridge starts per run via stdio, provides only `mcp-docker-exec`, and returns exact command results.
+
+Status (2026-02-25): Completed.
 
 ### Phase 3: Codex Invocation Rewire with Per-Run Config Overrides
 
@@ -226,4 +227,5 @@ Definition of done:
 Current sequencing state:
 
 1. Phase 1 complete
-2. Next active target: Phase 2 (`swebench-eval-next-c6b`)
+2. Phase 2 complete
+3. Next active target: Phase 3 (`swebench-eval-next-6kd`)
