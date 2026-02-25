@@ -16,6 +16,8 @@ SERVER_NAME = "mcp-docker-exec-server"
 SERVER_VERSION = "0.1.0"
 TOOL_NAME = "mcp-docker-exec"
 SUPPORTED_PROTOCOL_VERSION = "2024-11-05"
+TRANSPORT_CONTENT_LENGTH = "content_length"
+TRANSPORT_LINE = "line"
 
 
 @dataclass(frozen=True)
@@ -206,25 +208,35 @@ def _handle_message(message: Any, bindings: RuntimeBindings) -> dict[str, Any] |
     return _jsonrpc_error(message_id, -32601, f"Method not found: {method}")
 
 
-def _read_message(input_stream: Any) -> dict[str, Any] | None:
+def _parse_message_body(payload: bytes) -> dict[str, Any]:
+    decoded = payload.decode("utf-8", errors="strict")
+    parsed = json.loads(decoded)
+    if not isinstance(parsed, dict):
+        raise ValueError("message body must be a JSON object")
+    return parsed
+
+def _read_content_length_message(
+    input_stream: Any, first_header_line: bytes
+) -> tuple[dict[str, Any] | None, str]:
     content_length: int | None = None
+    line = first_header_line
 
     while True:
-        line = input_stream.readline()
         if line == b"":
-            return None
+            return None, TRANSPORT_CONTENT_LENGTH
         if line in (b"\r\n", b"\n"):
             break
 
         header = line.decode("utf-8", errors="replace").strip()
-        if not header:
-            continue
-        key, sep, value = header.partition(":")
-        if sep and key.lower() == "content-length":
-            try:
-                content_length = int(value.strip())
-            except ValueError as exc:
-                raise ValueError(f"invalid Content-Length header: {header}") from exc
+        if header:
+            key, sep, value = header.partition(":")
+            if sep and key.lower() == "content-length":
+                try:
+                    content_length = int(value.strip())
+                except ValueError as exc:
+                    raise ValueError(f"invalid Content-Length header: {header}") from exc
+
+        line = input_stream.readline()
 
     if content_length is None:
         raise ValueError("missing Content-Length header")
@@ -233,18 +245,38 @@ def _read_message(input_stream: Any) -> dict[str, Any] | None:
     if len(payload) != content_length:
         raise EOFError("unexpected EOF while reading message body")
 
-    decoded = payload.decode("utf-8", errors="strict")
-    parsed = json.loads(decoded)
-    if not isinstance(parsed, dict):
-        raise ValueError("message body must be a JSON object")
-    return parsed
+    return _parse_message_body(payload), TRANSPORT_CONTENT_LENGTH
 
 
-def _write_message(output_stream: Any, message: dict[str, Any]) -> None:
+def _read_line_message(first_line: bytes) -> tuple[dict[str, Any], str]:
+    stripped = first_line.strip()
+    if not stripped:
+        raise ValueError("empty line-delimited MCP message")
+    return _parse_message_body(stripped), TRANSPORT_LINE
+
+
+def _read_message(input_stream: Any) -> tuple[dict[str, Any] | None, str | None]:
+    while True:
+        first_line = input_stream.readline()
+        if first_line == b"":
+            return None, None
+        if first_line in (b"\r\n", b"\n"):
+            continue
+
+        stripped = first_line.lstrip()
+        if stripped.startswith((b"{", b"[")):
+            return _read_line_message(first_line)
+        return _read_content_length_message(input_stream, first_line)
+
+
+def _write_message(output_stream: Any, message: dict[str, Any], transport: str) -> None:
     encoded = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    header = f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii")
-    output_stream.write(header)
-    output_stream.write(encoded)
+    if transport == TRANSPORT_LINE:
+        output_stream.write(encoded + b"\n")
+    else:
+        header = f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii")
+        output_stream.write(header)
+        output_stream.write(encoded)
     output_stream.flush()
 
 
@@ -254,7 +286,7 @@ def serve(bindings: RuntimeBindings) -> int:
 
     while True:
         try:
-            message = _read_message(input_stream)
+            message, transport = _read_message(input_stream)
         except Exception as exc:  # pragma: no cover - protocol violation branch
             print(f"{SERVER_NAME}: protocol error: {exc}", file=sys.stderr)
             return 1
@@ -265,7 +297,7 @@ def serve(bindings: RuntimeBindings) -> int:
         response = _handle_message(message, bindings)
         if response is None:
             continue
-        _write_message(output_stream, response)
+        _write_message(output_stream, response, transport or TRANSPORT_CONTENT_LENGTH)
 
 
 def main() -> int:

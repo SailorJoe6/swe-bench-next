@@ -201,7 +201,115 @@ assert logged == expected, logged
 PY
 }
 
+run_case_line_delimited_protocol_and_passthrough() {
+  local docker_dir
+  local docker_log
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  docker_dir="$(make_fake_docker_bin)"
+  docker_log="$tmpdir/docker.log"
+
+  PATH="$docker_dir:$PATH" \
+  FAKE_DOCKER_LOG_PATH="$docker_log" \
+  FAKE_DOCKER_STDOUT=$'line-stdout\n' \
+  FAKE_DOCKER_STDERR=$'line-stderr\n' \
+  FAKE_DOCKER_EXIT_CODE=23 \
+  python3 - "$SERVER_SCRIPT" "$docker_log" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+server_script = sys.argv[1]
+docker_log = pathlib.Path(sys.argv[2])
+
+
+def send_line(pipe, payload):
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
+    pipe.write(body)
+    pipe.flush()
+
+
+def recv_line(pipe):
+    line = pipe.readline()
+    if line == b"":
+        raise RuntimeError("unexpected EOF while reading line-delimited MCP response")
+    return json.loads(line.decode("utf-8"))
+
+
+proc = subprocess.Popen(
+    [sys.executable, server_script, "--container-name", "runtime-line", "--workdir", "/testbed"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+
+assert proc.stdin is not None
+assert proc.stdout is not None
+assert proc.stderr is not None
+
+send_line(
+    proc.stdin,
+    {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test"}},
+    },
+)
+init_resp = recv_line(proc.stdout)
+assert init_resp["id"] == 0
+assert init_resp["result"]["protocolVersion"] == "2025-06-18"
+
+send_line(proc.stdin, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+
+send_line(proc.stdin, {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+list_resp = recv_line(proc.stdout)
+tools = list_resp["result"]["tools"]
+assert isinstance(tools, list) and len(tools) == 1
+assert tools[0]["name"] == "mcp-docker-exec"
+
+send_line(
+    proc.stdin,
+    {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "mcp-docker-exec",
+            "arguments": {"command": "echo line protocol"},
+        },
+    },
+)
+call_resp = recv_line(proc.stdout)
+assert call_resp["result"]["isError"] is False
+payload = call_resp["result"]["structuredContent"]
+assert payload["exit_code"] == 23
+assert payload["stdout"] == "line-stdout\n"
+assert payload["stderr"] == "line-stderr\n"
+
+proc.stdin.close()
+return_code = proc.wait(timeout=5)
+stderr_text = proc.stderr.read().decode("utf-8")
+assert return_code == 0, stderr_text
+
+logged = docker_log.read_text(encoding="utf-8").splitlines()
+expected = [
+    "-i",
+    "-w",
+    "/testbed",
+    "runtime-line",
+    "/bin/sh",
+    "-lc",
+    "echo line protocol",
+    "--",
+]
+assert logged == expected, logged
+PY
+}
+
 run_case_missing_bindings
 run_case_stdio_protocol_and_passthrough
+run_case_line_delimited_protocol_and_passthrough
 
 echo "PASS: mcp docker exec server"
