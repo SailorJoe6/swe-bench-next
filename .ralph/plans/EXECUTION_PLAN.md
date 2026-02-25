@@ -28,11 +28,27 @@ Audit date: 2026-02-25
 
 ### 2.2 Baseline Validation Snapshot
 
-Current regression scripts pass (old architecture):
+Current regression scripts pass (checkpoint after Phase 1 refactor):
 
 - `bash tests/test_start_swebench.sh` -> PASS
 - `bash tests/test_run_swebench_batch.sh` -> PASS
 - `bash tests/test_prepare_swebench_codex_images.sh` -> PASS
+
+### 2.3 Handoff Checkpoint (2026-02-25)
+
+- Last implementation commit for this plan: `1bd9bdd` (`main`, pushed to `origin/main`)
+- Phase 1 status: complete (no-bootstrap normal path + deterministic runtime naming/collision cleanup)
+- Remaining plan work is tracked in beads:
+  - `swebench-eval-next-c6b` (Phase 2 MCP bridge server)
+  - `swebench-eval-next-6kd` (Phase 3 host-run Codex + MCP-only invocation rewiring)
+  - `swebench-eval-next-p8m` (Phase 4/5 failure mapping + MCP-path tests/docs)
+- Dependency chain in beads:
+  - `swebench-eval-next-c6b` blocks `swebench-eval-next-6kd`
+  - `swebench-eval-next-6kd` blocks `swebench-eval-next-p8m`
+- Recommended pickup order:
+  1. `swebench-eval-next-c6b`
+  2. `swebench-eval-next-6kd`
+  3. `swebench-eval-next-p8m`
 
 ## 3. Scope Guardrails
 
@@ -206,3 +222,8 @@ Definition of done:
 5. Phase 5 tests/docs updates
 6. Validation matrix run
 7. Final acceptance review against all 12 spec criteria
+
+Current sequencing state:
+
+1. Phase 1 complete
+2. Next active target: Phase 2 (`swebench-eval-next-c6b`)
