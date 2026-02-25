@@ -37,16 +37,26 @@ Current regression scripts pass (checkpoint after Phase 3 rewiring):
 
 ### 2.3 Handoff Checkpoint (2026-02-25)
 
-- Last implementation commit before this checkpoint: `1bd9bdd` (`main`, pushed to `origin/main`)
+- Last implementation commit before this checkpoint: `67711c9` (`main`, pushed to `origin/main`)
 - Phase 1 status: complete (no-bootstrap normal path + deterministic runtime naming/collision cleanup)
 - Phase 2 status: complete (stdlib MCP bridge server + fake-docker MCP protocol tests)
 - Phase 3 status: complete (host-run Codex + per-run shell-disable and MCP config injection)
 - Remaining plan work is tracked in beads:
   - `swebench-eval-next-p8m` (Phase 4/5 failure mapping + MCP-path tests/docs)
+  - `swebench-eval-next-kh3` (bug: `bd ready --json` panic in this repo; workaround required for pickup)
 - Dependency chain in beads:
-  - `swebench-eval-next-6kd` blocks `swebench-eval-next-p8m` (resolved by Phase 3 implementation; close/update in beads workflow)
+  - `swebench-eval-next-p8m` depends on closed discovery lineage (`swebench-eval-next-4mh`, `swebench-eval-next-6kd`) and is currently the next implementation target
 - Recommended pickup order:
-  1. `swebench-eval-next-p8m`
+  1. `swebench-eval-next-kh3` (restore `bd ready --json` workflow reliability)
+  2. `swebench-eval-next-p8m` (Phase 4/5 implementation completion)
+
+### 2.4 Beads Workflow Note (Current Environment)
+
+- `bd ready --json` currently panics in this repository (tracked as `swebench-eval-next-kh3`).
+- Until fixed, use:
+  - `bd list --json`
+  - `bd show <issue-id> --json`
+  - `bd update <issue-id> ... --json`
 
 ## 3. Scope Guardrails
 

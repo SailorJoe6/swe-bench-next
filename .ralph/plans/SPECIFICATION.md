@@ -28,12 +28,18 @@ Current flow in `scripts/start-swebench.sh`:
 2. Create deterministic runtime container name `swebench-runtime-<sanitized-instance-id>`.
 3. Force-remove stale container with same name before create (`docker rm -f <name>`, ignore not-found).
 4. Create/start runtime container with explicit `--name`.
-5. Execute `codex exec -p local --dangerously-bypass-approvals-and-sandbox` inside that container via `docker exec`.
+5. Execute `codex exec -p local --dangerously-bypass-approvals-and-sandbox` on host.
+6. Inject per-run Codex config overrides that:
+   - disable built-in shell (`features.shell_tool=false`, `features.unified_exec=false`)
+   - register a deterministic MCP stdio server binding for `scripts/mcp-docker-exec-server.py`
+   - bind fixed runtime container name and container workdir for the invocation
 
 Implementation checkpoint:
 
-- normal-path codex/bootstrap image mutation has been removed
-- host-run Codex + MCP-only shell routing is not implemented yet
+- Phase 1 complete: normal-path codex/bootstrap image mutation removed and deterministic runtime naming/collision cleanup implemented
+- Phase 2 complete: repo-local MCP bridge implemented (`mcp-docker-exec`)
+- Phase 3 complete: host-run Codex + MCP-only shell routing implemented
+- Remaining work is Phase 4/5: failure mapping/diagnostics hardening plus final docs/test reconciliation
 
 ## 4. Core Problem
 
