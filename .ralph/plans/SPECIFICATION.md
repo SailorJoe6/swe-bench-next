@@ -39,7 +39,8 @@ Implementation checkpoint:
 - Phase 1 complete: normal-path codex/bootstrap image mutation removed and deterministic runtime naming/collision cleanup implemented
 - Phase 2 complete: repo-local MCP bridge implemented (`mcp-docker-exec`)
 - Phase 3 complete: host-run Codex + MCP-only shell routing implemented
-- Remaining work is Phase 4/5: failure mapping/diagnostics hardening plus final docs/test reconciliation
+- Phase 4 complete: MCP-path failures classify as `runtime_error` with explicit phase/context diagnostics
+- Remaining work is Phase 5 closeout: final docs index/status reconciliation for the new architecture
 
 ## 4. Core Problem
 

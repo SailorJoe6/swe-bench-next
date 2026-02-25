@@ -28,7 +28,7 @@ Audit date: 2026-02-25
 
 ### 2.2 Baseline Validation Snapshot
 
-Current regression scripts pass (checkpoint after Phase 3 rewiring):
+Current regression scripts pass (checkpoint after Phase 4 diagnostics hardening):
 
 - `bash tests/test_start_swebench.sh` -> PASS
 - `bash tests/test_run_swebench_batch.sh` -> PASS
@@ -37,26 +37,30 @@ Current regression scripts pass (checkpoint after Phase 3 rewiring):
 
 ### 2.3 Handoff Checkpoint (2026-02-25)
 
-- Last implementation commit before this checkpoint: `67711c9` (`main`, pushed to `origin/main`)
+- Latest implementation commits in this checkpoint:
+  - `60f1f5e` (MCP phase failure diagnostics hardening in runner + tests/docs updates)
+  - `b478d92` (beads status sync after diagnostics slice)
 - Phase 1 status: complete (no-bootstrap normal path + deterministic runtime naming/collision cleanup)
 - Phase 2 status: complete (stdlib MCP bridge server + fake-docker MCP protocol tests)
 - Phase 3 status: complete (host-run Codex + per-run shell-disable and MCP config injection)
+- Phase 4 status: complete (MCP-path runtime_error diagnostics now include phase/pass/runtime container/workdir/mcp server context and codex phase-log tails)
 - Remaining plan work is tracked in beads:
-  - `swebench-eval-next-p8m` (Phase 4/5 failure mapping + MCP-path tests/docs)
-  - `swebench-eval-next-kh3` (bug: `bd ready --json` panic in this repo; workaround required for pickup)
+  - `swebench-eval-next-p8m` (remaining Phase 5 docs/status reconciliation and final acceptance closeout)
+  - `swebench-eval-next-kh3` (intermittent Dolt panic in `bd` commands in this repo; see workflow note below)
 - Dependency chain in beads:
-  - `swebench-eval-next-p8m` depends on closed discovery lineage (`swebench-eval-next-4mh`, `swebench-eval-next-6kd`) and is currently the next implementation target
+  - `swebench-eval-next-p8m` depends on closed discovery lineage (`swebench-eval-next-4mh`, `swebench-eval-next-6kd`) and remains the current spec-closeout target
 - Recommended pickup order:
-  1. `swebench-eval-next-kh3` (restore `bd ready --json` workflow reliability)
-  2. `swebench-eval-next-p8m` (Phase 4/5 implementation completion)
+  1. `swebench-eval-next-p8m` (finish docs index/status reconciliation and close Phase 5 spec acceptance #12)
+  2. `swebench-eval-next-kh3` (stabilize `bd` Dolt backend panics to restore reliable issue workflows)
 
 ### 2.4 Beads Workflow Note (Current Environment)
 
-- `bd ready --json` currently panics in this repository (tracked as `swebench-eval-next-kh3`).
+- `bd` Dolt backend commands are currently flaky in this repository (tracked as `swebench-eval-next-kh3`).
+  - In this checkpoint, `bd ready --json` sometimes succeeds while `bd show swebench-eval-next-p8m --json` reproduced a nil-pointer panic.
 - Until fixed, use:
   - `bd list --json`
-  - `bd show <issue-id> --json`
   - `bd update <issue-id> ... --json`
+  - `bd comments add <issue-id> "..."`
 
 ## 3. Scope Guardrails
 
@@ -167,6 +171,8 @@ Definition of done:
 
 - MCP-path failures are explicit, diagnosable, and externally classified as `runtime_error`.
 
+Status (2026-02-25): Completed.
+
 ### Phase 5: Tests and Docs Update
 
 Target files:
@@ -196,6 +202,8 @@ Tasks:
 Definition of done:
 
 - Tests validate the new architecture and docs reflect implemented behavior.
+
+Status (2026-02-25): In progress (remaining: docs index/status reconciliation and final closeout of acceptance criterion #12).
 
 ## 5. Validation Matrix (Post-Implementation)
 
