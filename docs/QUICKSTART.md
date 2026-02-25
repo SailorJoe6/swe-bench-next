@@ -2,6 +2,16 @@
 
 This guide covers the quick and dirty about how we set up and run predictions and evaluations for SWE-Bench Multilingual using Qwen3-Coder-Next-FP8 on DGX Spark (ARM64/aarch64).
 
+## Status Context (February 25, 2026)
+
+- Phase 3 SWE-Agent work is complete/closed; completed outputs are under `results/phase3/` (299/300 multilingual test instances executed on ARM64).
+- Phase 5 Ralph + Codex runner architecture is complete (host-run Codex + MCP-routed shell execution); one live evaluation replay (`google__gson-2024`) has been executed, while full benchmark-scale Phase 5 execution is still pending.
+- For current status details, see **[Project Status](project-status.md)**.
+
+## Phase 5 Runner Note
+
+If you are using the current Ralph + Codex local workflow (`scripts/start-swebench.sh` and `scripts/run-swebench-batch.sh`), use **[docs/implementation/phase5-runner.md](implementation/phase5-runner.md)** as the source of truth for CLI usage, output contracts, and failure semantics.
+
 ## Prerequisites
 
 ### Hardware
@@ -77,6 +87,22 @@ Expected output: All 3 validation tests should pass.
 
 **Note**: First launch may take several minutes as the model loads. The server is ready when `validate-vllm.sh` reports "ALL TESTS PASSED".
 
+### 2b. Launch LiteLLM Bridge (Required for `codex -p local`)
+
+Codex local profile uses Responses API wire format. We run LiteLLM on `:8000` to bridge that to the vLLM chat backend on `:8888`.
+
+```bash
+# Start LiteLLM
+./scripts/launch-litellm.sh
+
+# Check bridge health/models
+./scripts/launch-litellm.sh --health
+
+# Mandatory Codex routing smoke test before Phase 5 runs
+codex exec -p local --dangerously-bypass-approvals-and-sandbox \
+  "Respond with exactly: CODEX_LOCAL_BRIDGE_OK"
+```
+
 ### 3. Tag ARM64 Docker Images
 
 SWE-agent expects standard SWE-bench image names. Tag ARM64 images for compatibility:
@@ -87,7 +113,7 @@ SWE-agent expects standard SWE-bench image names. Tag ARM64 images for compatibi
 
 ### 4. Run Predictions
 
-Launch the SWE-agent to generate predictions for all 300 test instances:
+Launch the SWE-agent to generate predictions for SWE-Bench Multilingual test instances (dataset split size is 300; current completed ARM64 run coverage in this project is 299/300):
 
 ```bash
 cd ~/Code/swebench-eval-next
@@ -142,6 +168,7 @@ nohup python -m swebench.harness.run_evaluation \
   --max_workers 1 \
   --run_id eval-batch \
   --arch arm64 \
+  --namespace none \
   > eval-batch.log 2>&1 &
 
 # Monitor
@@ -152,6 +179,8 @@ tail -f eval-batch.log
 ```bash
 ./scripts/run_test_eval.sh --max_workers 1
 ```
+
+`--namespace none` is required here to force SWE-Bench to use local `sweb.eval.arm64.*` images and avoid stale shared `swebench/...:latest` tags.
 
 ## Troubleshooting
 
@@ -174,6 +203,14 @@ tail -f eval-batch.log
 - Verify Docker is running: `docker ps`
 - Check model weights exist: `ls ~/.cache/huggingface/hub/models--Qwen--Qwen3-Coder-Next-FP8/`
 - Ensure spark-vllm-docker is properly configured
+
+### LiteLLM / Codex Local Issues
+
+**Codex local appears to use OpenAI instead of local stack**:
+- Confirm LiteLLM is running: `./scripts/launch-litellm.sh --status`
+- Confirm LiteLLM has models: `curl -sS http://127.0.0.1:8000/v1/models | jq .`
+- Confirm Codex local smoke test: `codex exec -p local --dangerously-bypass-approvals-and-sandbox "Respond with exactly: CODEX_LOCAL_BRIDGE_OK"`
+- Tail LiteLLM logs for traffic: `docker logs --tail 80 litellm-proxy`
 
 ### SWE-agent Issues
 
@@ -224,6 +261,7 @@ results/
 |------|---------|
 | `config/qwen3-vllm.yaml` | SWE-agent configuration for Qwen3-Coder-Next-FP8 |
 | `scripts/launch-vllm.sh` | Launch/stop/status for vLLM server |
+| `scripts/launch-litellm.sh` | Launch/stop/status for LiteLLM bridge |
 | `scripts/validate-vllm.sh` | Validate vLLM server health |
 | `scripts/check-eval-progress.sh` | Monitor evaluation progress |
 | `scripts/run_test_eval.sh` | Run test evaluations |

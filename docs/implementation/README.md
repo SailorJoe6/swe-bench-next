@@ -4,7 +4,7 @@ This folder contains technical implementation documentation for the SWE-Bench ev
 
 ## Documentation Index
 
-- **[Project Status](../project-status.md)** - Current repo status (Phase 3 closed; Phase 5 implemented but not yet run on live SWE-Bench instances)
+- **[Project Status](../project-status.md)** - Current repo status (Phase 3 closed; Phase 5 architecture closeout complete with limited live replay)
 - **[Phase 5 Runner](phase5-runner.md)** - Final single-instance and batch runner contract (`start-swebench.sh` + `run-swebench-batch.sh`)
 - **[MCP Docker Exec Bridge](mcp-docker-exec-bridge.md)** - Phase 2 stdlib MCP bridge server (`mcp-docker-exec`)
 - **[Codex Local Bridge](codex-local-bridge.md)** - Required LiteLLM + vLLM runtime chain for `codex -p local`
@@ -30,7 +30,7 @@ swebench-eval-next/
 2. **Phase 2**: Default Harness - Skipped (incompatible with custom vLLM)
 3. **Phase 3**: SWE-Agent - Agentic evaluation with ARM64 containers (completed/closed)
 4. **Phase 4**: mini-SWE-agent - Optional lightweight agent
-5. **Phase 5**: Ralph + Codex local runner workflow (implemented; no live SWE-Bench instance run yet)
+5. **Phase 5**: Ralph + Codex local runner workflow (implemented; host-run Codex + MCP shell routing finalized; one live replay complete)
 
 ## See Also
 

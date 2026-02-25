@@ -1,238 +1,240 @@
-# Specification: SWE-Bench Predictions via Simplified Ralph + Codex Local Profile
+# Specification: Use Instance Container as Codex Execution Sandbox
 
-## 1. Objective
-Build a SWE-Bench prediction workflow around a simplified, SWE-Bench-specific Ralph loop using Codex CLI with the DGX Spark local endpoint (`codex -p local`).
+## 1. Purpose
 
-The workflow must be split into:
-- a single-instance runner, and
-- a batch orchestrator that loops over the single-instance runner.
+Define a Phase 5 runner enhancement so Codex runs on host while command execution for SWE-Bench work is routed into the instance container via MCP.
 
-This separation reduces complexity, improves testability, and keeps batch orchestration concerns separate from per-instance execution concerns.
+This replaces the current "copy Codex into each instance image" model with a deterministic, container-targeted shell tool path.
 
-## 2. Current System
+## 2. Scope and Contract Freeze
 
-### 2.1 Existing Evaluation Pipeline
-The project currently supports SWE-Bench Multilingual runs using SWE-Agent and ARM64-native instance images.
+This specification is an enhancement to archived Phase 5 contracts in:
 
-Current scripts:
-- `scripts/run_predictions.sh` runs SWE-Agent batch predictions.
-- `scripts/run_test_eval.sh` runs SWE-Bench evaluation separately.
+- `.ralph/plans/archive/swe-ralph/SPECIFICATION.md`
+- `.ralph/plans/archive/swe-ralph/EXECUTION_PLAN.md`
 
-### 2.2 Existing Ralph Tooling
-`ralph/start` is a general-purpose workflow tool that is broader than needed for this project. For SWE-Bench we need a narrower, deterministic flow with explicit per-instance state.
+External contract is frozen unless shell-routing swap strictly requires change:
 
-### 2.3 Directory Role Boundaries (Critical)
-- `ralph/` is reference + static assets:
-  - full-power Ralph implementation/docs are reference only,
-  - `ralph/prompts` hosts final static SWE-Bench runtime prompts.
-- `.ralph/` is planning/status only:
-  - in-progress spec/plan documents live here,
-  - `.ralph/` is never runtime state.
-- Finished runtime behavior is implemented through:
-  - scripts in `scripts/`,
-  - runtime outputs in `results/phase5/...`.
+- keep existing runner entrypoints and user-facing CLI contracts
+- keep existing per-instance artifacts and manifest behavior
+- keep existing status vocabulary and exit semantics
+- keep plan/execute/handoff loop behavior
 
-## 3. Required System Changes
+## 3. Baseline (Current Implementation)
 
-### 3.1 New Entry Points
-Add three scripts:
-- `scripts/start-swebench.sh` (single-instance runner)
-- `scripts/run-swebench-batch.sh` (batch orchestrator)
-- `scripts/prepare-swebench-codex-images.sh` (manual optional prep utility)
+Current flow in `scripts/start-swebench.sh`:
 
-### 3.2 Scope and Responsibility Split
-- `start-swebench.sh` responsibilities:
-  - run exactly one instance (`--instance-id` required),
-  - require explicit output destination (`--output-dir <path>`) for that instance,
-  - accept optional `--manifest-dir <path>` (defaults to `--output-dir` when omitted),
-  - perform per-instance spec-seed -> plan -> execute -> handoff flow,
-  - handle container checks/bootstrap,
-  - classify result and write per-instance artifacts (`.patch`, `.pred`, `.status.json`),
-  - write/update run-level `run_manifest.json`.
-- `run-swebench-batch.sh` responsibilities:
-  - resolve batch scope (default split and optional instance-file subset),
-  - sort instances lexicographically by `instance_id`,
-  - call `start-swebench.sh` once per instance (sequential),
-  - pass `--manifest-dir` as parent of instance `--output-dir`,
-  - continue after per-instance failures,
-  - build run-level `predictions.jsonl` (and optional derived counters) by reading per-instance outputs.
-- Evaluation remains separate from both scripts.
+1. Resolve image `sweb.eval.arm64.<instance_id>:latest`.
+2. Create deterministic runtime container name `swebench-runtime-<sanitized-instance-id>`.
+3. Force-remove stale container with same name before create (`docker rm -f <name>`, ignore not-found).
+4. Create/start runtime container with explicit `--name`.
+5. Execute `codex exec -p local --dangerously-bypass-approvals-and-sandbox` on host.
+6. Inject per-run Codex config overrides that:
+   - disable built-in shell (`features.shell_tool=false`, `features.unified_exec=false`)
+   - register a deterministic MCP stdio server binding for `scripts/mcp-docker-exec-server.py`
+   - bind fixed runtime container name and container workdir for the invocation
 
-### 3.3 Model/Tool Constraints (Hard Requirements)
-For both runner layers:
-- Codex only (no Claude path).
-- Unattended execution only.
-- Force `codex -p local` (no profile override option).
+Implementation checkpoint:
 
-### 3.4 Data Source and Run Modes
-- `start-swebench.sh`:
-  - single-instance mode only, via required `--instance-id <id>`,
-  - required `--output-dir <path>` for per-instance runtime outputs,
-  - optional `--manifest-dir <path>` (defaults to `--output-dir`).
-- `run-swebench-batch.sh`:
-  - default scope: SWE-Bench Multilingual, test split,
-  - optional `--instance-file` subset input,
-  - sequential only,
-  - deterministic lexicographic ordering by `instance_id`.
+- Phase 1 complete: normal-path codex/bootstrap image mutation removed and deterministic runtime naming/collision cleanup implemented
+- Phase 2 complete: repo-local MCP bridge implemented (`mcp-docker-exec`)
+- Phase 3 complete: host-run Codex + MCP-only shell routing implemented
+- Phase 4 complete: MCP-path failures classify as `runtime_error` with explicit phase/context diagnostics
+- Remaining work is Phase 5 closeout: final docs index/status reconciliation for the new architecture
 
-### 3.5 Container/Image Strategy
-Use local SWE-Bench ARM64 instance images (`sweb.eval.arm64.<instance>:latest`) as execution containers.
+## 4. Core Problem
 
-Codex availability:
-- Runtime fallback in `start-swebench.sh`:
-  - check for codex in container,
-  - bootstrap if missing.
-- Manual prep path in `scripts/prepare-swebench-codex-images.sh`:
-  - pre-inject codex binary/config,
-  - overwrite image tags in place,
-  - not auto-invoked by runtime scripts.
+Runtime image mutation and in-image Codex bootstrap are brittle:
 
-### 3.6 Codex Binary and Config Injection
-Bootstrap sources:
-- binary: `/home/sailorjoe6/.cargo/bin/codex`
-- config: `/home/sailorjoe6/.codex/config.toml`
+- per-image runtime/library differences can break copied binary execution
+- image mutation at runtime is operationally hard to reason about
+- troubleshooting and reproducibility are weaker than host-executed Codex
 
-The `local` profile must remain usable inside container context.
+## 5. Final Architecture Decisions
 
-### 3.7 Ralph Workflow Adaptation for SWE-Bench
-Per-instance flow in `start-swebench.sh`:
-- seed `SPECIFICATION.md` from `problem_statement` (no design prompt phase),
-- run `plan.md`,
-- run execute loop via `execute.md`,
-- run `handoff.md` on execute passes,
-- terminal blocked state means failed instance; no blocked-mode prompt flow.
+1. Codex runtime placement: host.
+2. Shell execution backend: MCP only (built-in Codex shell disabled).
+3. MCP style: per-run stdio process launched by Codex.
+4. MCP implementation: repo-owned minimal Python server (no external Python package dependency).
+5. MCP tool surface: exactly one command tool named `mcp-docker-exec`.
+6. Target container selection: runner passes exact container name per invocation (no model-side switching, no discovery heuristics).
+7. Working directory: fixed by runner per invocation; no command-level cwd override.
+8. Command freedom: full parity with current shell freedom (no allowlist/denylist in this iteration).
+9. Output contract: return raw stdout/stderr and exact exit code from underlying `docker exec`, with minimal JSON framing.
+10. Failure taxonomy: keep existing external reason-code vocabulary; map MCP/route failures to existing `runtime_error` with explicit detail.
 
-Runtime prompt set (only):
-- `ralph/prompts/plan.md`
-- `ralph/prompts/execute.md`
-- `ralph/prompts/handoff.md`
+## 6. Runner and Container Lifecycle Contract
 
-`design.md` and `blocked.md` are not runtime inputs.
+Runner continues to own lifecycle of runtime containers.
 
-Prompt preflight:
-- Required prompt files must be validated before first instance execution.
-- Missing required prompt file is a hard-fail for the invocation.
+### 6.1 Runtime Container Naming
 
-### 3.8 Loop Termination and Pass Budget
-- `--max-loops` applies to execute-phase iterations only.
-- Default is `50`.
-- Terminal state detection uses per-instance plan directories (`archive`, `blocked`, root).
+`start-swebench.sh` must create runtime container name:
 
-### 3.9 Per-Instance Isolation and Paths
-Per-instance mutable runtime state includes at minimum:
-- plans (`SPECIFICATION.md`, `EXECUTION_PLAN.md`)
-- plans state folders (`archive/`, `blocked/`)
-- per-instance logs and artifacts
+- `swebench-runtime-<sanitized-instance-id>`
 
-Location policy:
-- runtime state must be under per-instance output folders in `results/phase5/...`.
-- runtime state must not be written under `.ralph/`.
-- `ralph/` may host static prompts only.
+Sanitization rules:
 
-### 3.10 Classification and Failure Reasons
-Per-instance status values are fixed:
-- `success`
-- `failed`
-- `incomplete`
+- lowercase
+- replace chars outside `[a-z0-9_.-]` with `-`
+- collapse repeated `-`
+- trim leading/trailing `-`
+- enforce Docker name length constraints deterministically
 
-Classification rules:
-- `success`: planning docs archived and non-empty patch.
-- `failed`: planning docs moved to blocked.
-- `incomplete`: planning docs remain in root plans dir when run ends.
+### 6.2 Collision Policy
 
-Failure reason code vocabulary (fixed):
-- `missing_image`
-- `codex_bootstrap_failed`
-- `blocked`
-- `incomplete`
-- `runtime_error`
-- `null` (success only)
+Before creating runtime container, runner must force-remove any existing container with the same name:
 
-### 3.11 Artifact Contract
-Per instance, write:
-- `<instance>.patch`
-- `<instance>.pred` with keys:
-  - `model_name_or_path` (must be `qwen3-coder-next-FP8,codex,ralph`)
-  - `instance_id`
-  - `model_patch`
-- `<instance>.status.json` with keys:
-  - `instance_id`
-  - `status`
-  - `failure_reason_code`
-  - `failure_reason_detail`
-  - `error_log`
+- `docker rm -f <runtime_name>` (ignore not-found)
+- then `docker create --name <runtime_name> ...`
 
-`<instance>.status.json` must always be written for every processed instance, including success.
+This prevents environment litter and stale-container ambiguity without timestamp suffixes.
 
-For blocked/failed/no-image/bootstrap-fail cases, `model_patch` must be explicit empty string.
+### 6.3 Lifecycle Ownership
 
-### 3.12 Batch-Level Outputs
-`run-swebench-batch.sh` must produce:
-- run root: `results/phase5/ralph-codex-local/<timestamp>/`
-- run-level `predictions.jsonl` (constructed by aggregating `<instance>.pred` files)
+Keep existing runner behavior:
 
-Run-level manifest ownership:
-- `start-swebench.sh` writes/updates `run_manifest.json`.
-- Manifest path is `<manifest_dir>/run_manifest.json`.
-- If `--manifest-dir` is omitted, `manifest_dir` defaults to `--output-dir`.
-- In batch mode (with `--output-dir <run_root>/<instance_id>` and `--manifest-dir <run_root>`), this resolves to:
-  - `results/phase5/ralph-codex-local/<timestamp>/run_manifest.json`
-- `start-swebench.sh` must always write/update `run_manifest.json` for every invocation, including direct single-instance runs.
+- create/start runtime container before phase execution
+- cleanup runtime container at script exit via existing trap-driven cleanup path
 
-Manifest must include:
-- invocation args
-- dataset/scope
-- start/end times
-- per-instance status and failure metadata (`status`, `failure_reason_code`, `failure_reason_detail`, `error_log`)
-- aggregate counts
+No lifecycle orchestration is added to the MCP server in this iteration.
 
-Batch error policy:
-- continue processing remaining instances after per-instance failures.
-- `run-swebench-batch.sh` should create one timestamped run root and pass per-instance `--output-dir` paths under that run root to each `start-swebench.sh` invocation.
-- `run-swebench-batch.sh` should pass `--manifest-dir <run_root>` on each `start-swebench.sh` invocation.
-- Per-instance output path convention is fixed: `--output-dir <run_root>/<instance_id>`.
+## 7. Codex Invocation Contract
 
-### 3.13 Documentation End-State
-Top-level `docs/` must document the finished workflow and entrypoints:
-- `scripts/start-swebench.sh` (single-instance)
-- `scripts/run-swebench-batch.sh` (batch)
+`start-swebench.sh` continues to invoke Codex with local profile and unattended mode:
 
-`ralph/docs` must not be the canonical source for the finished workflow.
+- `codex exec -p local --dangerously-bypass-approvals-and-sandbox ...`
 
-## 4. Out of Scope
-- Running evaluation from prediction scripts.
-- Supporting Claude or non-local profiles.
-- Parallel batch execution (>1 worker).
-- Runtime mutable state under `.ralph/`.
+Per Codex invocation, runner must pass minimal deterministic `--config` overrides that:
 
-## 5. Expected End State
+1. disable built-in shell feature
+2. define required MCP server launcher for the minimal bridge
+3. bind target container/workdir for that run
+
+Design constraints:
+
+- no mutation of global `~/.codex/config.toml` at runtime
+- no per-run temp config file requirement
+- all critical routing params are explicit on invocation
+
+## 8. MCP Bridge Contract
+
+Add a repo-local Python MCP server script (for example `scripts/mcp-docker-exec-server.py`) with stdio transport.
+
+### 8.1 Startup and Dependencies
+
+- lightweight startup
+- Python stdlib only (no extra pip install dependency)
+- process launched by Codex as stdio MCP server for each run
+
+### 8.2 Tool Surface
+
+Expose exactly one tool:
+
+- `mcp-docker-exec`
+
+No additional Docker management or orchestration tools in this iteration.
+
+### 8.3 Runtime Binding Inputs
+
+Runner passes binding inputs at launch (via Codex MCP server config) for:
+
+- target container name
+- fixed workdir inside container
+
+Tool must reject execution if required binding inputs are missing.
+
+### 8.4 Execution Semantics
+
+For each call:
+
+- execute command using fixed container + workdir
+- shell semantics match current behavior (`/bin/sh -lc ...`)
+- run as container default user (current behavior parity; root in current images)
+- no `-t` interactive terminal allocation
+
+### 8.5 Response Semantics
+
+Return:
+
+- `exit_code` from executed command
+- raw `stdout`
+- raw `stderr`
+
+No output rewriting or synthetic interpretation beyond required tool response framing.
+
+## 9. Tooling Scope and Context Budget
+
+Keep current useful tool availability and only swap shell path:
+
+- keep `web_search`
+- keep `update_plan`
+- keep `view_image`
+- `request_user_input` remains effectively unavailable for unattended `codex exec` flow
+
+Shell execution must be deterministic and unambiguous:
+
+- built-in shell disabled
+- only MCP shell-equivalent tool available for command execution
+
+## 10. Failure Model
+
+For this iteration:
+
+- no retries in MCP bridge
+- no auto-start/auto-restart from MCP bridge
+- failures are explicit and immediate
+
+Mapping policy:
+
+- keep existing public failure reason vocabulary
+- map MCP startup failure, tool routing failure, and container exec failure classification to `runtime_error`
+- include precise `failure_reason_detail` and `error_log` context
+
+## 11. Required System Changes
+
+1. Remove normal-path dependency on Codex bootstrap/copy into instance images.
+2. Execute Codex on host and route shell commands through MCP bridge into runtime container.
+3. Add deterministic runtime container naming and collision cleanup logic.
+4. Add minimal MCP server script in repo.
+5. Update `start-swebench.sh` Codex command construction to include per-run MCP `--config` overrides.
+6. Keep `run-swebench-batch.sh` external behavior unchanged; only propagate internal changes through `start-swebench.sh`.
+7. Update docs (`docs/implementation/phase5-runner.md` and index pages) to reflect new shell-routing architecture.
+8. Update/extend tests for:
+   - runtime container naming and collision cleanup behavior
+   - no-bootstrap normal path
+   - MCP config injection correctness
+   - deterministic failure mapping and logs for MCP-path failures
+
+## 12. Non-Goals (This Iteration)
+
+1. Full container orchestration platform in MCP layer.
+2. Parallel-execution redesign.
+3. New failure reason code vocabulary.
+4. Restrictive command allowlist/denylist policy.
+5. Long-running MCP daemon architecture.
+
+## 13. Expected End State
+
 After implementation:
-- Operators can run one instance with `scripts/start-swebench.sh --instance-id <id> --output-dir <path> [--manifest-dir <path>]`.
-- Operators can run sequential batch predictions with `scripts/run-swebench-batch.sh`.
-- Batch order is deterministic (lexicographic by `instance_id`).
-- Per-instance outputs are isolated under `results/phase5/.../<instance>/`.
-- Batch run outputs include `predictions.jsonl` and `run_manifest.json`.
-- Failure reasons are machine-readable in both per-instance status files and batch manifest.
-- `.ralph/` remains planning-only.
-- `ralph/prompts` contains final runtime prompts.
 
-## 6. Acceptance Criteria
-1. `scripts/start-swebench.sh` exists, runs exactly one instance per invocation, requires `--output-dir`, and supports optional `--manifest-dir` defaulting to `--output-dir`.
-2. `scripts/run-swebench-batch.sh` exists and drives sequential batch execution by invoking `start-swebench.sh` per instance.
-3. Both scripts enforce Codex-only unattended `codex -p local` behavior.
-4. `--max-loops` exists (default 50) and governs execute-phase loop count per instance.
-5. Batch mode processes instances in lexicographic `instance_id` order.
-6. Per-instance isolation lives under `results/phase5/.../<instance>/` and not under `.ralph/`.
-7. Per-instance artifacts (`.patch`, `.pred`, `.status.json`) are written with required schema.
-8. `model_name_or_path` is exactly `qwen3-coder-next-FP8,codex,ralph`.
-9. `failure_reason_code` is limited to fixed vocabulary (or `null` on success).
-10. Missing required prompt files hard-fail before processing instances.
-11. Blocked states are hard-fail for that instance (no blocked-mode prompt flow).
-12. Batch continues on per-instance failures and emits run-level `predictions.jsonl`.
-13. `start-swebench.sh` does not write run-level `predictions.jsonl`; `run-swebench-batch.sh` builds it from per-instance `.pred` files.
-14. `start-swebench.sh` writes/updates run-level manifest at `<manifest_dir>/run_manifest.json` (`manifest_dir` defaults to `--output-dir`; batch passes `--manifest-dir <run_root>` so path resolves to `results/phase5/ralph-codex-local/<timestamp>/run_manifest.json`).
-15. `scripts/prepare-swebench-codex-images.sh` exists, is manual/optional, and overwrites image tags in place.
-16. Top-level `docs/` documents both new scripts and finished workflow contracts.
-17. `run-swebench-batch.sh` passes `--output-dir` to `start-swebench.sh` as exactly `<run_root>/<instance_id>`.
-18. `run-swebench-batch.sh` passes `--manifest-dir` to `start-swebench.sh` as exactly `<run_root>`.
-19. `start-swebench.sh` always writes/updates `run_manifest.json`, including direct single-instance runs with omitted `--manifest-dir`.
+1. Codex is no longer copied into instance images for normal execution.
+2. `start-swebench.sh` creates named runtime container, runs Codex on host, and routes shell commands into that container via MCP.
+3. Shell path is deterministic (MCP-only), with fixed container/workdir binding per run.
+4. Existing Phase 5 external contract remains intact aside from required internal shell-routing swap.
+5. Diagnostics are clearer because container target and MCP routing are explicit in run logs.
+
+## 14. Acceptance Criteria
+
+1. Host-run Codex path is active; normal execution no longer depends on runtime image bootstrap of Codex.
+2. Runtime container name follows `swebench-runtime-<sanitized-instance-id>` convention.
+3. Runner force-removes same-name stale container before create.
+4. Built-in Codex shell is disabled in runner invocation path.
+5. Minimal MCP bridge is launched per run via stdio and marked required.
+6. Bridge exposes only `mcp-docker-exec`.
+7. Bridge executes commands only in prebound container/workdir.
+8. Bridge returns exact exit code, stdout, stderr from `docker exec` path.
+9. Existing Phase 5 output artifacts and status schema remain unchanged.
+10. MCP-path failures map to existing `runtime_error` with explicit details.
+11. `run-swebench-batch.sh` user-facing contract remains unchanged.
+12. Docs and tests are updated to reflect and validate the new architecture.
