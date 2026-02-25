@@ -7,10 +7,12 @@ DATASET_SPLIT="test"
 MODEL_NAME_OR_PATH="qwen3-coder-next-FP8,codex,ralph"
 CODEX_PROFILE="local"
 CODEX_BIN="${CODEX_BIN:-codex}"
+MCP_BRIDGE_SERVER_NAME="swebench_docker_exec"
 INSTANCE_FIXTURE_ENV_VAR="SWE_BENCH_INSTANCES_FILE"
 MAX_LOOPS_DEFAULT=50
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MCP_BRIDGE_SCRIPT="$REPO_ROOT/scripts/mcp-docker-exec-server.py"
 PROMPTS_DIR="$REPO_ROOT/ralph/prompts"
 REQUIRED_PROMPTS=(plan.md execute.md handoff.md)
 IMAGE_REPO_PREFIX="sweb.eval.arm64"
@@ -444,6 +446,35 @@ codex_phase_log_path() {
   echo "$OUTPUT_DIR/logs/codex_${phase}.log"
 }
 
+toml_quote_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  printf '"%s"' "$value"
+}
+
+append_codex_config_overrides() {
+  local -n codex_cmd_ref="$1"
+  local quoted_mcp_script=""
+  local quoted_runtime_container_name=""
+  local quoted_container_workdir=""
+  local mcp_args_value=""
+
+  quoted_mcp_script="$(toml_quote_string "$MCP_BRIDGE_SCRIPT")"
+  quoted_runtime_container_name="$(toml_quote_string "$RUNTIME_CONTAINER_NAME")"
+  quoted_container_workdir="$(toml_quote_string "$CONTAINER_WORKDIR")"
+  mcp_args_value="[$quoted_mcp_script,\"--container-name\",$quoted_runtime_container_name,\"--workdir\",$quoted_container_workdir]"
+
+  codex_cmd_ref+=(
+    -c "features.shell_tool=false"
+    -c "features.unified_exec=false"
+    -c "mcp_servers={}"
+    -c "mcp_servers.${MCP_BRIDGE_SERVER_NAME}.command=\"python3\""
+    -c "mcp_servers.${MCP_BRIDGE_SERVER_NAME}.args=${mcp_args_value}"
+  )
+}
+
 run_codex_phase() {
   local phase="$1"
   local pass_index="$2"
@@ -452,7 +483,7 @@ run_codex_phase() {
   local phase_log
   local prompt_text
   local -a codex_cmd
-  local -a docker_env_args
+  local -a codex_env_vars
 
   phase_log="$(codex_phase_log_path "$phase")"
   prompt_text="$(render_prompt_template "$prompt_path" "$phase" "$pass_index")"
@@ -467,49 +498,43 @@ run_codex_phase() {
       echo "handoff phase requires execute session id for resume" >&2
       return 1
     fi
-    printf 'phase=%s pass=%s container=%s cmd=%s exec -p %s --dangerously-bypass-approvals-and-sandbox resume %s <prompt:%s>\n' \
-      "$phase" "$pass_index" "$RUNTIME_CONTAINER_NAME" "$CODEX_BIN" "$CODEX_PROFILE" "$resume_session_id" "$prompt_path" >> "$OUTPUT_DIR/logs/codex_command.txt"
     codex_cmd=(
       "$CODEX_BIN"
       exec
       -p "$CODEX_PROFILE"
       --dangerously-bypass-approvals-and-sandbox
-      resume
-      "$resume_session_id"
-      "$prompt_text"
     )
+    append_codex_config_overrides codex_cmd
+    codex_cmd+=(resume "$resume_session_id" "$prompt_text")
   else
-    printf 'phase=%s pass=%s container=%s cmd=%s exec -p %s --dangerously-bypass-approvals-and-sandbox <prompt:%s>\n' \
-      "$phase" "$pass_index" "$RUNTIME_CONTAINER_NAME" "$CODEX_BIN" "$CODEX_PROFILE" "$prompt_path" >> "$OUTPUT_DIR/logs/codex_command.txt"
     codex_cmd=(
       "$CODEX_BIN"
       exec
       -p "$CODEX_PROFILE"
       --dangerously-bypass-approvals-and-sandbox
-      "$prompt_text"
     )
+    append_codex_config_overrides codex_cmd
+    codex_cmd+=("$prompt_text")
   fi
 
-  docker_env_args=(
-    -e "SWE_BENCH_RUNTIME_PHASE=$phase"
-    -e "SWE_BENCH_EXECUTE_PASS=$pass_index"
-    -e "SWE_BENCH_INSTANCE_ID=$INSTANCE_ID"
-    -e "SWE_BENCH_OUTPUT_DIR=$OUTPUT_DIR"
-    -e "SWE_BENCH_PLANS_DIR=$PLANS_DIR"
-    -e "SWE_BENCH_SPEC_PATH=$SPEC_PATH"
-    -e "SWE_BENCH_PLAN_PATH=$PLAN_PATH"
-    -e "SWE_BENCH_ARCHIVE_DIR=$ARCHIVE_DIR"
-    -e "SWE_BENCH_BLOCKED_DIR=$BLOCKED_DIR"
-    -e "SWE_BENCH_PATCH_PATH=$PATCH_PATH"
-    -e "SWE_BENCH_IMAGE_REF=$IMAGE_REF"
+  printf 'phase=%s pass=%s runtime_container=%s mcp_server=%s cmd=%s exec -p %s --dangerously-bypass-approvals-and-sandbox -c features.shell_tool=false -c features.unified_exec=false -c mcp_servers={} -c mcp_servers.%s.command="python3" -c mcp_servers.%s.args=[%s,"--container-name",%s,"--workdir",%s] <prompt:%s>\n' \
+    "$phase" "$pass_index" "$RUNTIME_CONTAINER_NAME" "$MCP_BRIDGE_SERVER_NAME" "$CODEX_BIN" "$CODEX_PROFILE" "$MCP_BRIDGE_SERVER_NAME" "$MCP_BRIDGE_SERVER_NAME" "$(toml_quote_string "$MCP_BRIDGE_SCRIPT")" "$(toml_quote_string "$RUNTIME_CONTAINER_NAME")" "$(toml_quote_string "$CONTAINER_WORKDIR")" "$prompt_path" >> "$OUTPUT_DIR/logs/codex_command.txt"
+
+  codex_env_vars=(
+    "SWE_BENCH_RUNTIME_PHASE=$phase"
+    "SWE_BENCH_EXECUTE_PASS=$pass_index"
+    "SWE_BENCH_INSTANCE_ID=$INSTANCE_ID"
+    "SWE_BENCH_OUTPUT_DIR=$OUTPUT_DIR"
+    "SWE_BENCH_PLANS_DIR=$PLANS_DIR"
+    "SWE_BENCH_SPEC_PATH=$SPEC_PATH"
+    "SWE_BENCH_PLAN_PATH=$PLAN_PATH"
+    "SWE_BENCH_ARCHIVE_DIR=$ARCHIVE_DIR"
+    "SWE_BENCH_BLOCKED_DIR=$BLOCKED_DIR"
+    "SWE_BENCH_PATCH_PATH=$PATCH_PATH"
+    "SWE_BENCH_IMAGE_REF=$IMAGE_REF"
   )
 
-  docker exec \
-    -i \
-    "${docker_env_args[@]}" \
-    -w "$CONTAINER_WORKDIR" \
-    "$RUNTIME_CONTAINER_NAME" \
-    "${codex_cmd[@]}" >>"$phase_log" 2>&1
+  env "${codex_env_vars[@]}" "${codex_cmd[@]}" >>"$phase_log" 2>&1
 }
 
 replace_prompt_var() {
@@ -667,6 +692,7 @@ EXECUTE_PROMPT_PATH="$PROMPTS_DIR/execute.md"
 HANDOFF_PROMPT_PATH="$PROMPTS_DIR/handoff.md"
 RUNTIME_ERR_PATH="$OUTPUT_DIR/logs/runtime_error.log"
 RUNTIME_CONTAINER_ERR_PATH="$OUTPUT_DIR/logs/runtime_container_error.log"
+MCP_BRIDGE_PRECHECK_ERR_PATH="$OUTPUT_DIR/logs/mcp_bridge_precheck_error.log"
 
 START_TIME="$(timestamp_utc)"
 ERROR_LOG=""
@@ -705,6 +731,16 @@ if [[ "$STATUS" != "failed" ]] && ! ensure_docker_available 2>"$IMAGE_PRECHECK_E
   FAILURE_REASON_DETAIL="docker command not found on PATH"
   if [[ -f "$IMAGE_PRECHECK_ERR_PATH" ]]; then
     ERROR_LOG="$(cat "$IMAGE_PRECHECK_ERR_PATH")"
+  fi
+fi
+
+if [[ "$STATUS" != "failed" ]] && [[ ! -f "$MCP_BRIDGE_SCRIPT" ]]; then
+  STATUS="failed"
+  FAILURE_REASON_CODE="runtime_error"
+  FAILURE_REASON_DETAIL="Missing required MCP bridge script: ${MCP_BRIDGE_SCRIPT}"
+  printf 'required MCP bridge script not found: %s\n' "$MCP_BRIDGE_SCRIPT" > "$MCP_BRIDGE_PRECHECK_ERR_PATH"
+  if [[ -f "$MCP_BRIDGE_PRECHECK_ERR_PATH" ]]; then
+    ERROR_LOG="$(cat "$MCP_BRIDGE_PRECHECK_ERR_PATH")"
   fi
 fi
 

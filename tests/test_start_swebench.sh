@@ -276,6 +276,8 @@ make_isolated_runner_root() {
   tmpdir="$(mktemp -d)"
   mkdir -p "$tmpdir/scripts"
   cp "$SCRIPT" "$tmpdir/scripts/start-swebench.sh"
+  cp "$REPO_ROOT/scripts/mcp-docker-exec-server.py" "$tmpdir/scripts/mcp-docker-exec-server.py"
+  chmod +x "$tmpdir/scripts/mcp-docker-exec-server.py"
   chmod +x "$tmpdir/scripts/start-swebench.sh"
   echo "$tmpdir"
 }
@@ -631,6 +633,79 @@ run_case_no_bootstrap_dependency() {
   fi
 }
 
+run_case_host_run_codex_with_mcp_config_injection() {
+  local tmpdir
+  local codex_bin
+  local docker_bin
+  local isolated_script
+  local instance_fixture
+  local docker_log
+  local instance_id
+  tmpdir="$(make_isolated_runner_root)"
+  codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  docker_log="$tmpdir/docker.log"
+  instance_id="repo__mcp-config-check"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "$instance_id" "Verify host-run codex MCP config injection."
+
+  set +e
+  PATH="$docker_bin:$codex_bin:$PATH" FAKE_DOCKER_IMAGE_EXISTS=1 FAKE_DOCKER_LOG_PATH="$docker_log" FAKE_CODEX_SCENARIO=stay_in_root SWE_BENCH_INSTANCES_FILE="$instance_fixture" "$isolated_script" --instance-id "$instance_id" --output-dir "$tmpdir/out" --max-loops 1 > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "20" "$status" "host codex MCP config case should run and end incomplete at loop limit"
+
+  python3 - "$tmpdir" "$instance_id" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+instance_id = sys.argv[2]
+
+plan_args = (root / "out" / "logs" / "fake_args_plan.txt").read_text(encoding="utf-8").splitlines()
+execute_args = (root / "out" / "logs" / "fake_args_execute.txt").read_text(encoding="utf-8").splitlines()
+assert plan_args, "missing fake_args_plan log"
+assert execute_args, "missing fake_args_execute log"
+
+def assert_pair(args, key, value):
+    for idx, token in enumerate(args[:-1]):
+        if token == key and args[idx + 1] == value:
+            return
+    raise AssertionError(f"missing argument pair: {key} {value}\nargs={args}")
+
+assert plan_args[0] == "exec"
+assert_pair(plan_args, "-p", "local")
+assert "--dangerously-bypass-approvals-and-sandbox" in plan_args
+
+configs = [plan_args[idx + 1] for idx, token in enumerate(plan_args[:-1]) if token == "-c"]
+assert "features.shell_tool=false" in configs
+assert "features.unified_exec=false" in configs
+assert "mcp_servers={}" in configs
+assert 'mcp_servers.swebench_docker_exec.command="python3"' in configs
+
+prefix = "swebench-runtime-"
+sanitized = re.sub(r"[^a-z0-9_.-]+", "-", instance_id.lower())
+sanitized = re.sub(r"-+", "-", sanitized).strip("-")
+if not sanitized:
+    sanitized = "instance"
+expected_runtime_name = prefix + sanitized
+expected_bridge = root / "scripts" / "mcp-docker-exec-server.py"
+expected_args_config = (
+    'mcp_servers.swebench_docker_exec.args=['
+    f'"{expected_bridge}","--container-name","{expected_runtime_name}","--workdir","/testbed"'
+    ']'
+)
+assert expected_args_config in configs, configs
+
+docker_lines = (root / "docker.log").read_text(encoding="utf-8").splitlines()
+assert not any(line.startswith("exec ") for line in docker_lines), docker_lines
+PY
+}
+
 run_case_runtime_container_name_and_collision_cleanup() {
   local tmpdir
   local codex_bin
@@ -882,10 +957,11 @@ run_case_repo_runtime_prompts_available
 run_case_prompt_template_replacement
 run_case_missing_instance_image
 run_case_no_bootstrap_dependency
+run_case_host_run_codex_with_mcp_config_injection
 run_case_runtime_container_name_and_collision_cleanup
 run_case_success_archive_classification
 run_case_mismatch_after_execute_fails
 run_case_max_loops_budget
 run_case_missing_instance_metadata
 
-echo "PASS: start-swebench phase2 runtime tests"
+echo "PASS: start-swebench phase3 runtime tests"

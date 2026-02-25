@@ -22,7 +22,13 @@ The script is a minimal stdio MCP server used to route shell command execution i
 
 ## Current Integration State
 
-As of February 25, 2026, this bridge exists and is tested, but Phase 3 runner rewiring is still pending. `scripts/start-swebench.sh` has not yet switched to host-run Codex + MCP-only shell routing.
+As of February 25, 2026, this bridge is integrated into `scripts/start-swebench.sh` Phase execution:
+
+- Codex runs on host (`codex exec -p local --dangerously-bypass-approvals-and-sandbox`)
+- Per invocation, the runner injects config overrides to:
+  - disable built-in shell tools
+  - register a deterministic stdio MCP server binding to the run's runtime container/workdir
+- Shell command execution is routed through `mcp-docker-exec` into the prebound runtime container
 
 ## Validation
 

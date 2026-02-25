@@ -13,22 +13,22 @@ Audit date: 2026-02-25
 
 | Spec acceptance criterion | Status | Evidence |
 | --- | --- | --- |
-| 1. Host-run Codex path active; no normal-path image bootstrap dependency | Not met | Codex still runs via `docker exec`, but normal-path codex/bootstrap image mutation was removed from `scripts/start-swebench.sh` |
+| 1. Host-run Codex path active; no normal-path image bootstrap dependency | Met | `scripts/start-swebench.sh` now invokes `codex exec` on host and no longer uses `docker exec ... codex`; normal-path codex/bootstrap image mutation remains removed |
 | 2. Runtime container uses `swebench-runtime-<sanitized-instance-id>` naming | Met | `scripts/start-swebench.sh` now computes deterministic `swebench-runtime-<sanitized-instance-id>` names |
 | 3. Runner force-removes same-name stale container before create | Met | `scripts/start-swebench.sh` now does `docker rm -f <runtime_name>` before `docker create --name <runtime_name> ...` |
-| 4. Built-in Codex shell disabled in runner invocation path | Not met | Codex invoked without shell disable overrides |
-| 5. Minimal stdio MCP bridge launched per run and required | Not met | Repo-local bridge script exists, but `scripts/start-swebench.sh` does not launch/configure MCP yet |
+| 4. Built-in Codex shell disabled in runner invocation path | Met | `scripts/start-swebench.sh` injects `-c features.shell_tool=false` and `-c features.unified_exec=false` on each Codex phase call |
+| 5. Minimal stdio MCP bridge launched per run and required | Met | `scripts/start-swebench.sh` injects per-run MCP server config pointing at `scripts/mcp-docker-exec-server.py` with deterministic container/workdir bindings |
 | 6. Bridge exposes only `mcp-docker-exec` | Met | `scripts/mcp-docker-exec-server.py` exposes exactly one tool (`mcp-docker-exec`) via `tools/list` |
 | 7. Bridge executes only in prebound container/workdir | Met | `scripts/mcp-docker-exec-server.py` requires startup bindings and always executes `docker exec -i -w <workdir> <container> /bin/sh -lc <command>` |
 | 8. Bridge returns exact `exit_code`, `stdout`, `stderr` from `docker exec` path | Met | `scripts/mcp-docker-exec-server.py` returns raw `stdout`/`stderr` and exact exit code in structured payload |
 | 9. Existing Phase 5 artifacts/status schema unchanged | Met | Current outputs and status/manifest schema already match Phase 5 contract |
-| 10. MCP-path failures map to `runtime_error` with explicit details | Not met | No MCP path implemented yet |
+| 10. MCP-path failures map to `runtime_error` with explicit details | Not met | MCP path is active, but diagnostics/failure-detail hardening for MCP startup/routing/container-exec remains tracked in Phase 4 (`swebench-eval-next-p8m`) |
 | 11. `run-swebench-batch.sh` user-facing contract unchanged | Met | Current batch CLI/behavior already matches frozen contract |
-| 12. Docs and tests updated for new architecture | Not met | Phase 2 bridge tests added (`tests/test_mcp_docker_exec_server.sh`), but runner MCP rewiring/failure mapping docs/tests remain pending |
+| 12. Docs and tests updated for new architecture | Not met | Runner rewiring test coverage/docs were partially updated, but full failure-mapping tests and broad docs reconciliation remain in Phase 5 (`swebench-eval-next-p8m`) |
 
 ### 2.2 Baseline Validation Snapshot
 
-Current regression scripts pass (checkpoint after Phase 1 refactor):
+Current regression scripts pass (checkpoint after Phase 3 rewiring):
 
 - `bash tests/test_start_swebench.sh` -> PASS
 - `bash tests/test_run_swebench_batch.sh` -> PASS
@@ -40,14 +40,13 @@ Current regression scripts pass (checkpoint after Phase 1 refactor):
 - Last implementation commit before this checkpoint: `1bd9bdd` (`main`, pushed to `origin/main`)
 - Phase 1 status: complete (no-bootstrap normal path + deterministic runtime naming/collision cleanup)
 - Phase 2 status: complete (stdlib MCP bridge server + fake-docker MCP protocol tests)
+- Phase 3 status: complete (host-run Codex + per-run shell-disable and MCP config injection)
 - Remaining plan work is tracked in beads:
-  - `swebench-eval-next-6kd` (Phase 3 host-run Codex + MCP-only invocation rewiring)
   - `swebench-eval-next-p8m` (Phase 4/5 failure mapping + MCP-path tests/docs)
 - Dependency chain in beads:
-  - `swebench-eval-next-6kd` blocks `swebench-eval-next-p8m`
+  - `swebench-eval-next-6kd` blocks `swebench-eval-next-p8m` (resolved by Phase 3 implementation; close/update in beads workflow)
 - Recommended pickup order:
-  1. `swebench-eval-next-6kd`
-  2. `swebench-eval-next-p8m`
+  1. `swebench-eval-next-p8m`
 
 ## 3. Scope Guardrails
 
@@ -136,6 +135,8 @@ Tasks:
 Definition of done:
 
 - Codex runs on host and shell operations are routed only through MCP bridge into the prebound runtime container.
+
+Status (2026-02-25): Completed.
 
 ### Phase 4: Failure Mapping and Diagnostics Hardening
 
@@ -228,4 +229,5 @@ Current sequencing state:
 
 1. Phase 1 complete
 2. Phase 2 complete
-3. Next active target: Phase 3 (`swebench-eval-next-6kd`)
+3. Phase 3 complete
+4. Next active target: Phase 4/5 (`swebench-eval-next-p8m`)

@@ -25,7 +25,12 @@ For top-level status context across phases, see **[Project Status](../project-st
 - Unattended execution path only.
 - Fixed profile: `codex -p local`.
 - `codex -p local` must resolve to local DGX provider (LiteLLM on `:8000` + vLLM on `:8888`).
-- All Codex phase commands run inside the instance container (`sweb.eval.arm64.<instance_id>:latest`) with container workdir defaulting to `/testbed`.
+- Codex phase commands are invoked on host.
+- Built-in shell execution is disabled per invocation (`features.shell_tool=false`, `features.unified_exec=false`).
+- A per-run stdio MCP bridge (`scripts/mcp-docker-exec-server.py`) is injected per Codex call and bound to:
+  - runtime container `swebench-runtime-<sanitized-instance-id>`
+  - fixed container workdir (default `/testbed`)
+- Shell command execution is routed into the runtime container through MCP tool `mcp-docker-exec`.
 - Runtime prompts loaded only from:
   - `ralph/prompts/plan.md`
   - `ralph/prompts/execute.md`
@@ -79,7 +84,7 @@ For one invocation, the script:
    - `swebench-runtime-<sanitized-instance-id>`
    - sanitization: lowercase, chars outside `[a-z0-9_.-]` replaced with `-`, repeated `-` collapsed, edge `-` trimmed, deterministic truncation to Docker-safe length
    - stale same-name container is force-removed before create (`docker rm -f <name>`, ignore not-found)
-6. Creates/starts the runtime container from the instance image and runs all phase commands in that container.
+6. Creates/starts the runtime container from the instance image; Codex runs on host with shell routed into that container via MCP bridge.
 7. Enters loop-based phase dispatch:
    - if root `SPECIFICATION.md` exists and root `EXECUTION_PLAN.md` is missing: run `plan` as its own Codex session (`codex exec`, no resume).
    - if both root planning docs exist: run `execute` as a new Codex session (`codex exec`, no resume).
