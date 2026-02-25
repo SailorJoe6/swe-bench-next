@@ -18,19 +18,21 @@ For each selected image, the script:
 1. validates the image exists,
 2. creates a temporary container,
 3. copies codex binary/config into the container,
-4. commits the container back to the same tag,
+4. commits the container back to the same tag while preserving original image `ENTRYPOINT` and `CMD`,
 5. verifies `codex` is available in the updated image.
 
 Tag overwrite behavior is in-place:
 
 - `sweb.eval.arm64.<instance_id>:latest` is committed back to itself.
 
+The script also verifies runtime metadata after commit so codex bootstrap cannot silently change container startup behavior.
+
 ## Bootstrap Sources
 
 Defaults:
 
 - binary: `/home/sailorjoe6/.cargo/bin/codex`
-- config: `/home/sailorjoe6/.codex/config.toml`
+- config: `config/codex-container-config.toml` (project-local minimal config for container `-p local`)
 
 Overrides:
 

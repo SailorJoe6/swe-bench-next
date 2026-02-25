@@ -43,11 +43,25 @@ VLLM_ARGS="python3 -m vllm.entrypoints.openai.api_server \
 case "${1:-}" in
     --stop)
         cd "$SPARK_VLLM_DIR"
-        exec ./launch-cluster.sh stop
+        exec ./launch-cluster.sh --solo stop
         ;;
     --status)
-        cd "$SPARK_VLLM_DIR"
-        exec ./launch-cluster.sh status
+        if ! docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
+            echo "vLLM container '$CONTAINER_NAME' is not running."
+            exit 1
+        fi
+        echo "vLLM container '$CONTAINER_NAME' is running."
+        if docker exec "$CONTAINER_NAME" bash -lc "ps -ef | grep -q 'vllm.entrypoints.openai.api_server'"; then
+            echo "vLLM API server process is running in container."
+        else
+            echo "vLLM API server process is not running in container."
+        fi
+        if curl -sf http://localhost:8888/health >/dev/null 2>&1; then
+            echo "vLLM health endpoint is ready: http://localhost:8888/health"
+        else
+            echo "vLLM health endpoint is not ready yet: http://localhost:8888/health"
+        fi
+        exit 0
         ;;
     --logs)
         exec docker logs -f "$CONTAINER_NAME"

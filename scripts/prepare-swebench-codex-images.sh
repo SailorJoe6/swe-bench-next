@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 IMAGE_REPO_PREFIX="sweb.eval.arm64"
 CODEX_BOOTSTRAP_BIN_PATH="${CODEX_BOOTSTRAP_BIN_PATH:-/home/sailorjoe6/.cargo/bin/codex}"
-CODEX_BOOTSTRAP_CONFIG_PATH="${CODEX_BOOTSTRAP_CONFIG_PATH:-/home/sailorjoe6/.codex/config.toml}"
+CODEX_BOOTSTRAP_CONFIG_PATH="${CODEX_BOOTSTRAP_CONFIG_PATH:-$REPO_ROOT/config/codex-container-config.toml}"
 
 INSTANCE_FILE=""
 INCLUDE_ALL_LOCAL_IMAGES=0
@@ -31,7 +33,7 @@ Options:
 
 Environment overrides:
   CODEX_BOOTSTRAP_BIN_PATH     (default: /home/sailorjoe6/.cargo/bin/codex)
-  CODEX_BOOTSTRAP_CONFIG_PATH  (default: /home/sailorjoe6/.codex/config.toml)
+  CODEX_BOOTSTRAP_CONFIG_PATH  (default: config/codex-container-config.toml)
 USAGE
 }
 
@@ -160,14 +162,42 @@ cleanup_container() {
   fi
 }
 
+normalize_docker_config_array() {
+  local raw_value="$1"
+  if [[ "$raw_value" == "null" || -z "$raw_value" ]]; then
+    echo "[]"
+    return 0
+  fi
+  echo "$raw_value"
+}
+
 inject_codex_into_image() {
   local image_ref="$1"
   local container_id=""
+  local original_entrypoint_raw=""
+  local original_cmd_raw=""
+  local original_entrypoint=""
+  local original_cmd=""
+  local current_entrypoint=""
+  local current_cmd=""
 
   if ! docker image inspect "$image_ref" >/dev/null 2>&1; then
     error "image not found: $image_ref"
     return 1
   fi
+
+  if ! original_entrypoint_raw="$(docker image inspect "$image_ref" --format '{{json .Config.Entrypoint}}')"; then
+    error "failed to inspect image entrypoint before bootstrap: $image_ref"
+    return 1
+  fi
+
+  if ! original_cmd_raw="$(docker image inspect "$image_ref" --format '{{json .Config.Cmd}}')"; then
+    error "failed to inspect image command before bootstrap: $image_ref"
+    return 1
+  fi
+
+  original_entrypoint="$(normalize_docker_config_array "$original_entrypoint_raw")"
+  original_cmd="$(normalize_docker_config_array "$original_cmd_raw")"
 
   if ! container_id="$(docker create --entrypoint /bin/sh "$image_ref" -lc 'while true; do sleep 3600; done')"; then
     error "failed to create bootstrap container from image: $image_ref"
@@ -210,13 +240,38 @@ inject_codex_into_image() {
     return 1
   fi
 
-  if ! docker commit "$container_id" "$image_ref" >/dev/null; then
+  if ! docker exec "$container_id" /bin/sh -lc "chown root:root /root/.codex/config.toml /home/sailorjoe6/.codex/config.toml /usr/local/bin/codex && chmod 600 /root/.codex/config.toml /home/sailorjoe6/.codex/config.toml"; then
+    error "failed to normalize codex ownership/permissions in container: $container_id"
+    cleanup_container "$container_id"
+    return 1
+  fi
+
+  if ! docker commit \
+    --change "ENTRYPOINT ${original_entrypoint}" \
+    --change "CMD ${original_cmd}" \
+    "$container_id" "$image_ref" >/dev/null; then
     error "failed to commit bootstrapped image: $image_ref"
     cleanup_container "$container_id"
     return 1
   fi
 
   cleanup_container "$container_id"
+
+  if ! current_entrypoint="$(docker image inspect "$image_ref" --format '{{json .Config.Entrypoint}}')"; then
+    error "failed to inspect image entrypoint after bootstrap: $image_ref"
+    return 1
+  fi
+
+  if ! current_cmd="$(docker image inspect "$image_ref" --format '{{json .Config.Cmd}}')"; then
+    error "failed to inspect image command after bootstrap: $image_ref"
+    return 1
+  fi
+
+  if [[ "$(normalize_docker_config_array "$current_entrypoint")" != "$original_entrypoint" || \
+        "$(normalize_docker_config_array "$current_cmd")" != "$original_cmd" ]]; then
+    error "image runtime metadata changed during codex bootstrap: $image_ref"
+    return 1
+  fi
 
   if ! docker run --rm --entrypoint /bin/sh "$image_ref" -lc "command -v codex >/dev/null 2>&1"; then
     error "codex verification failed after bootstrap commit: $image_ref"

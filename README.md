@@ -8,8 +8,17 @@ This project reproduces the [Qwen3-Coder-Next on Spark setup](https://forums.dev
 
 See **[docs/](docs/)** for complete documentation including:
 - vLLM server setup with the [custom Spark container](https://github.com/eugr/spark-vllm-docker/)
+- LiteLLM bridge setup required for `codex -p local` (Responses API -> vLLM chat)
 - **[ARM64 support guide](docs/arm64-support/)** for building and running evaluations
 - Scripts and configuration
+
+## Project Status
+
+Current status is tracked in **[docs/project-status.md](docs/project-status.md)**.
+
+Highlights:
+- Phase 3 SWE-Agent evaluation work is complete/closed, with completed run outputs in `results/phase3/`.
+- Phase 5 Ralph + Codex runner implementation is complete, with a completed live evaluation replay for `google__gson-2024`; full benchmark-scale Phase 5 execution is still pending.
 
 ## Project Structure
 

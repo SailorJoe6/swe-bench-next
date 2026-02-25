@@ -112,6 +112,20 @@ python -m swebench.harness.prepare_images \
 ./scripts/tag-arm64-images.sh
 ```
 
+### Step 4: Evaluate with Local Namespace Isolation
+
+When running harness evaluation on ARM64, use `--namespace none` so SWE-Bench uses local `sweb.eval.arm64.*` images instead of potentially stale shared `swebench/...` tags:
+
+```bash
+python -m swebench.harness.run_evaluation \
+  --dataset_name SWE-bench/SWE-bench_Multilingual \
+  --split test \
+  --predictions_path <predictions.jsonl> \
+  --run_id <run_id> \
+  --arch arm64 \
+  --namespace none
+```
+
 ## Related Fix: Maven Resource Bundle SNAPSHOT
 
 A separate issue also affects all 5 Druid instances on ARM64. Apache Druid's root `pom.xml` references `org.apache.apache.resources:apache-jar-resource-bundle:1.5-SNAPSHOT`. Original x86_64 Docker images had this artifact cached locally, but fresh ARM64 rebuilds don't.

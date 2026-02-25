@@ -1,0 +1,12 @@
+model = "gpt-5.3-codex"
+model_reasoning_effort = "high"
+
+[model_providers.dgx_spark]
+name = "DGX Spark"
+base_url = "http://host.docker.internal:8000/v1"
+wire_api = "responses"
+
+[profiles.local]
+model = "Qwen3-Coder-Next"
+model_context_window = 262144
+model_provider = "dgx_spark"
