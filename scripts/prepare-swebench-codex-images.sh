@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 IMAGE_REPO_PREFIX="sweb.eval.arm64"
 CODEX_BOOTSTRAP_BIN_PATH="${CODEX_BOOTSTRAP_BIN_PATH:-/home/sailorjoe6/.cargo/bin/codex}"
 CODEX_BOOTSTRAP_CONFIG_PATH="${CODEX_BOOTSTRAP_CONFIG_PATH:-$REPO_ROOT/config/codex-container-config.toml}"
+PLAYWRIGHT_CHROMIUM_VERSION="${SWE_BENCH_PLAYWRIGHT_VERSION:-1.39.0}"
+PLAYWRIGHT_BROWSERS_PATH="${SWE_BENCH_PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
 
 INSTANCE_FILE=""
 INCLUDE_ALL_LOCAL_IMAGES=0
@@ -34,6 +36,8 @@ Options:
 Environment overrides:
   CODEX_BOOTSTRAP_BIN_PATH     (default: /home/sailorjoe6/.cargo/bin/codex)
   CODEX_BOOTSTRAP_CONFIG_PATH  (default: config/codex-container-config.toml)
+  SWE_BENCH_PLAYWRIGHT_VERSION (default: 1.39.0)
+  SWE_BENCH_PLAYWRIGHT_BROWSERS_PATH (default: /opt/ms-playwright)
 USAGE
 }
 
@@ -171,6 +175,86 @@ normalize_docker_config_array() {
   echo "$raw_value"
 }
 
+probe_chrome_launcher_state() {
+  local container_id="$1"
+
+  docker exec "$container_id" /bin/sh -lc '
+set -eu
+probe_bin() {
+  bin="$1"
+  if "$bin" --version >/dev/null 2>&1; then
+    echo "ready"
+    exit 0
+  fi
+
+  if "$bin" --version 2>&1 | grep -q "requires the chromium snap to be installed"; then
+    echo "snap-wrapper"
+    exit 0
+  fi
+
+  echo "broken"
+  exit 0
+}
+
+if command -v google-chrome >/dev/null 2>&1; then
+  probe_bin google-chrome
+fi
+
+if command -v chromium-browser >/dev/null 2>&1; then
+  probe_bin chromium-browser
+fi
+
+echo "absent"
+'
+}
+
+bootstrap_playwright_chrome() {
+  local container_id="$1"
+
+  docker exec -i \
+    -e "PLAYWRIGHT_VERSION=$PLAYWRIGHT_CHROMIUM_VERSION" \
+    -e "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" \
+    "$container_id" /bin/sh <<'SH'
+set -eu
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required to bootstrap Playwright Chromium" >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm is required to bootstrap Playwright Chromium" >&2
+  exit 1
+fi
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+cd "$tmpdir"
+
+npx -y "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium >/tmp/playwright-install-deps.log 2>&1
+npx -y "playwright@${PLAYWRIGHT_VERSION}" install chromium >/tmp/playwright-install.log 2>&1
+
+chrome_path="$(find "${PLAYWRIGHT_BROWSERS_PATH}" -type f -path "*/chrome-linux/chrome" | head -n 1)"
+if [ -z "${chrome_path}" ] || [ ! -x "${chrome_path}" ]; then
+  echo "Playwright Chromium executable not found in ${PLAYWRIGHT_BROWSERS_PATH}" >&2
+  exit 1
+fi
+
+cat > /usr/local/bin/swebench-chrome <<EOF
+#!/usr/bin/env bash
+exec "${chrome_path}" "\$@"
+EOF
+chmod 755 /usr/local/bin/swebench-chrome
+
+ln -sf /usr/local/bin/swebench-chrome /usr/local/bin/google-chrome
+ln -sf /usr/local/bin/swebench-chrome /usr/local/bin/chromium-browser
+ln -sf /usr/local/bin/swebench-chrome /usr/bin/google-chrome
+ln -sf /usr/local/bin/swebench-chrome /usr/bin/chromium-browser
+
+google-chrome --version >/dev/null 2>&1
+SH
+}
+
 inject_codex_into_image() {
   local image_ref="$1"
   local container_id=""
@@ -178,8 +262,10 @@ inject_codex_into_image() {
   local original_cmd_raw=""
   local original_entrypoint=""
   local original_cmd=""
+  local -a commit_changes=()
   local current_entrypoint=""
   local current_cmd=""
+  local chrome_state=""
 
   if ! docker image inspect "$image_ref" >/dev/null 2>&1; then
     error "image not found: $image_ref"
@@ -199,7 +285,7 @@ inject_codex_into_image() {
   original_entrypoint="$(normalize_docker_config_array "$original_entrypoint_raw")"
   original_cmd="$(normalize_docker_config_array "$original_cmd_raw")"
 
-  if ! container_id="$(docker create --entrypoint /bin/sh "$image_ref" -lc 'while true; do sleep 3600; done')"; then
+  if ! container_id="$(docker create --entrypoint '' "$image_ref" /bin/sh -lc 'while true; do sleep 3600; done')"; then
     error "failed to create bootstrap container from image: $image_ref"
     return 1
   fi
@@ -246,9 +332,40 @@ inject_codex_into_image() {
     return 1
   fi
 
+  if ! chrome_state="$(probe_chrome_launcher_state "$container_id")"; then
+    error "failed to probe chrome launcher state in container: $container_id"
+    cleanup_container "$container_id"
+    return 1
+  fi
+  chrome_state="${chrome_state:-absent}"
+
+  case "$chrome_state" in
+    ready|absent)
+      ;;
+    snap-wrapper|broken)
+      echo "Bootstrap Chromium for browser tests in image: $image_ref (state=$chrome_state)"
+      if ! bootstrap_playwright_chrome "$container_id"; then
+        error "failed to bootstrap working Chromium launcher in container: $container_id"
+        cleanup_container "$container_id"
+        return 1
+      fi
+      ;;
+    *)
+      error "unexpected chrome launcher state '$chrome_state' in container: $container_id"
+      cleanup_container "$container_id"
+      return 1
+      ;;
+  esac
+
+  if [[ "$original_entrypoint_raw" != "null" ]]; then
+    commit_changes+=(--change "ENTRYPOINT ${original_entrypoint}")
+  fi
+  if [[ "$original_cmd_raw" != "null" ]]; then
+    commit_changes+=(--change "CMD ${original_cmd}")
+  fi
+
   if ! docker commit \
-    --change "ENTRYPOINT ${original_entrypoint}" \
-    --change "CMD ${original_cmd}" \
+    "${commit_changes[@]}" \
     "$container_id" "$image_ref" >/dev/null; then
     error "failed to commit bootstrapped image: $image_ref"
     cleanup_container "$container_id"
@@ -273,8 +390,8 @@ inject_codex_into_image() {
     return 1
   fi
 
-  if ! docker run --rm --entrypoint /bin/sh "$image_ref" -lc "command -v codex >/dev/null 2>&1"; then
-    error "codex verification failed after bootstrap commit: $image_ref"
+  if ! docker run --rm --entrypoint /bin/sh "$image_ref" -lc "command -v codex >/dev/null 2>&1 && if command -v google-chrome >/dev/null 2>&1; then google-chrome --version >/dev/null 2>&1; fi"; then
+    error "codex/browser verification failed after bootstrap commit: $image_ref"
     return 1
   fi
 

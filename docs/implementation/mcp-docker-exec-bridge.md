@@ -18,10 +18,15 @@ The script is a minimal stdio MCP server used to route shell command execution i
   - container workdir (`--workdir` or `SWE_BENCH_RUNTIME_CONTAINER_WORKDIR` / `SWE_BENCH_CONTAINER_WORKDIR`)
 - Executes commands with:
   - `docker exec -i -w <workdir> <container> /bin/sh -lc <command>`
+- Enforces a per-call execution timeout:
+  - default: `55s`
+  - configurable via `SWE_BENCH_MCP_DOCKER_EXEC_TIMEOUT_SECONDS` or `--command-timeout-seconds`
+  - per-call override accepted via tool argument `timeout_seconds`
 - Returns structured command results:
   - `exit_code`
   - raw `stdout`
   - raw `stderr`
+  - timeout returns `exit_code=124` with timeout detail in `stderr`
 
 ## Current Integration State
 
@@ -53,3 +58,4 @@ The test suite validates:
 - single-tool surface (`mcp-docker-exec`)
 - exact docker exec argument path
 - passthrough of `exit_code`, `stdout`, and `stderr`
+- timeout guard behavior for long-running docker-exec calls

@@ -18,12 +18,14 @@ TOOL_NAME = "mcp-docker-exec"
 SUPPORTED_PROTOCOL_VERSION = "2024-11-05"
 TRANSPORT_CONTENT_LENGTH = "content_length"
 TRANSPORT_LINE = "line"
+RESOURCE_URI = "mcp://mcp-docker-exec-server/usage"
 
 
 @dataclass(frozen=True)
 class RuntimeBindings:
     container_name: str
     workdir: str
+    command_timeout_seconds: float | None
 
 
 def parse_args() -> RuntimeBindings:
@@ -49,6 +51,14 @@ def parse_args() -> RuntimeBindings:
             "(default: SWE_BENCH_RUNTIME_CONTAINER_WORKDIR or SWE_BENCH_CONTAINER_WORKDIR)."
         ),
     )
+    parser.add_argument(
+        "--command-timeout-seconds",
+        default=os.environ.get("SWE_BENCH_MCP_DOCKER_EXEC_TIMEOUT_SECONDS", "55"),
+        help=(
+            "Maximum seconds for one docker-exec tool call "
+            "(default: SWE_BENCH_MCP_DOCKER_EXEC_TIMEOUT_SECONDS or 55; <=0 disables timeout)."
+        ),
+    )
     args = parser.parse_args()
 
     missing: list[str] = []
@@ -64,7 +74,19 @@ def parse_args() -> RuntimeBindings:
     if missing:
         parser.error("missing required runtime bindings: " + ", ".join(missing))
 
-    return RuntimeBindings(container_name=container_name, workdir=workdir)
+    timeout_raw = str(args.command_timeout_seconds).strip()
+    try:
+        timeout_value = float(timeout_raw)
+    except ValueError as exc:
+        parser.error(f"invalid --command-timeout-seconds value: {timeout_raw}")  # pragma: no cover
+        raise exc
+
+    timeout_seconds = timeout_value if timeout_value > 0 else None
+    return RuntimeBindings(
+        container_name=container_name,
+        workdir=workdir,
+        command_timeout_seconds=timeout_seconds,
+    )
 
 
 def _jsonrpc_result(message_id: Any, result: dict[str, Any]) -> dict[str, Any]:
@@ -95,14 +117,70 @@ def _tool_definition() -> dict[str, Any]:
                 "command": {
                     "type": "string",
                     "description": "Command string executed as /bin/sh -lc <command>.",
-                }
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": "Optional per-call timeout in seconds. Must be > 0.",
+                },
             },
             "required": ["command"],
         },
     }
 
 
-def _run_docker_exec(bindings: RuntimeBindings, command: str) -> dict[str, Any]:
+def _resource_definition() -> dict[str, Any]:
+    return {
+        "uri": RESOURCE_URI,
+        "name": "mcp-docker-exec usage",
+        "description": "How to use the tool-only docker exec MCP bridge.",
+        "mimeType": "text/markdown",
+    }
+
+
+def _resource_content(bindings: RuntimeBindings) -> dict[str, Any]:
+    text = "\n".join(
+        [
+            "# MCP Docker Exec Bridge",
+            "",
+            "This MCP server exposes one tool:",
+            f"- `{TOOL_NAME}`",
+            "",
+            "Runtime bindings:",
+            f"- container: `{bindings.container_name}`",
+            f"- workdir: `{bindings.workdir}`",
+            "",
+            "Usage:",
+            "1. Call `tools/list` to discover available tools.",
+            "2. Call `tools/call` with:",
+            f'   - `name`: `{TOOL_NAME}`',
+            '   - `arguments`: `{"command":"<shell command>"}`',
+            "",
+            "Command execution path:",
+            "- docker exec -i -w <workdir> <container> /bin/sh -lc <command>",
+            "",
+            "Notes:",
+            "- This server is tool-first and does not expose a filesystem browser.",
+            "- Use shell commands for file reads/writes, tests, and inspections.",
+            (
+                "- Default per-call timeout: "
+                + (
+                    f"{bindings.command_timeout_seconds:g}s"
+                    if bindings.command_timeout_seconds is not None
+                    else "disabled"
+                )
+            ),
+        ]
+    )
+    return {
+        "uri": RESOURCE_URI,
+        "mimeType": "text/markdown",
+        "text": text,
+    }
+
+
+def _run_docker_exec(
+    bindings: RuntimeBindings, command: str, timeout_seconds: float | None
+) -> dict[str, Any]:
     cmd = [
         "docker",
         "exec",
@@ -114,12 +192,30 @@ def _run_docker_exec(bindings: RuntimeBindings, command: str) -> dict[str, Any]:
         "-lc",
         command,
     ]
-    completed = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return {
-        "exit_code": completed.returncode,
-        "stdout": completed.stdout.decode("utf-8", errors="replace"),
-        "stderr": completed.stderr.decode("utf-8", errors="replace"),
-    }
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+        )
+        return {
+            "exit_code": completed.returncode,
+            "stdout": completed.stdout.decode("utf-8", errors="replace"),
+            "stderr": completed.stderr.decode("utf-8", errors="replace"),
+        }
+    except subprocess.TimeoutExpired as exc:
+        stdout_bytes = exc.stdout if isinstance(exc.stdout, bytes) else (exc.stdout or "").encode("utf-8")
+        stderr_bytes = exc.stderr if isinstance(exc.stderr, bytes) else (exc.stderr or "").encode("utf-8")
+        timeout_text = f"docker exec command timed out after {timeout_seconds:g}s"
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        stderr = f"{stderr}\n{timeout_text}".lstrip("\n")
+        return {
+            "exit_code": 124,
+            "stdout": stdout_bytes.decode("utf-8", errors="replace"),
+            "stderr": stderr,
+        }
 
 
 def _handle_tools_call(message_id: Any, params: Any, bindings: RuntimeBindings) -> dict[str, Any]:
@@ -153,8 +249,21 @@ def _handle_tools_call(message_id: Any, params: Any, bindings: RuntimeBindings) 
             ),
         )
 
+    timeout_value = bindings.command_timeout_seconds
+    if "timeout_seconds" in arguments:
+        raw_timeout = arguments.get("timeout_seconds")
+        if not isinstance(raw_timeout, (int, float)) or raw_timeout <= 0:
+            return _jsonrpc_result(
+                message_id,
+                _tool_result(
+                    {"error": "argument 'timeout_seconds' must be a number > 0"},
+                    is_error=True,
+                ),
+            )
+        timeout_value = float(raw_timeout)
+
     try:
-        payload = _run_docker_exec(bindings, command)
+        payload = _run_docker_exec(bindings, command, timeout_value)
     except OSError as exc:
         return _jsonrpc_result(
             message_id,
@@ -165,6 +274,20 @@ def _handle_tools_call(message_id: Any, params: Any, bindings: RuntimeBindings) 
         )
 
     return _jsonrpc_result(message_id, _tool_result(payload, is_error=False))
+
+
+def _handle_resources_read(message_id: Any, params: Any, bindings: RuntimeBindings) -> dict[str, Any]:
+    if not isinstance(params, dict):
+        return _jsonrpc_error(message_id, -32602, "resources/read params must be an object")
+
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri.strip():
+        return _jsonrpc_error(message_id, -32602, "resources/read requires a non-empty 'uri' string")
+
+    if uri != RESOURCE_URI:
+        return _jsonrpc_error(message_id, -32602, f"unknown resource '{uri}'")
+
+    return _jsonrpc_result(message_id, {"contents": [_resource_content(bindings)]})
 
 
 def _handle_message(message: Any, bindings: RuntimeBindings) -> dict[str, Any] | None:
@@ -189,7 +312,7 @@ def _handle_message(message: Any, bindings: RuntimeBindings) -> dict[str, Any] |
             message_id,
             {
                 "protocolVersion": protocol_version,
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "resources": {}},
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
             },
         )
@@ -199,6 +322,12 @@ def _handle_message(message: Any, bindings: RuntimeBindings) -> dict[str, Any] |
 
     if method == "tools/list":
         return _jsonrpc_result(message_id, {"tools": [_tool_definition()]})
+
+    if method == "resources/list":
+        return _jsonrpc_result(message_id, {"resources": [_resource_definition()]})
+
+    if method == "resources/read":
+        return _handle_resources_read(message_id, params, bindings)
 
     if method == "tools/call":
         return _handle_tools_call(message_id, params, bindings)

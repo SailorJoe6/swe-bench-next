@@ -18,8 +18,10 @@ For each selected image, the script:
 1. validates the image exists,
 2. creates a temporary container,
 3. copies codex binary/config into the container,
-4. commits the container back to the same tag while preserving original image `ENTRYPOINT` and `CMD`,
-5. verifies `codex` is available in the updated image.
+4. probes browser launcher state for `google-chrome` / `chromium-browser`,
+5. when the launcher is a broken Ubuntu snap wrapper, installs Playwright Chromium and rewires launcher paths to a real binary,
+6. commits the container back to the same tag while preserving original image `ENTRYPOINT` and `CMD`,
+7. verifies `codex` is available (and verifies browser launcher when present) in the updated image.
 
 Tag overwrite behavior is in-place:
 
@@ -38,6 +40,8 @@ Overrides:
 
 - `CODEX_BOOTSTRAP_BIN_PATH`
 - `CODEX_BOOTSTRAP_CONFIG_PATH`
+- `SWE_BENCH_PLAYWRIGHT_VERSION` (default: `1.39.0`, Node 16 compatible)
+- `SWE_BENCH_PLAYWRIGHT_BROWSERS_PATH` (default: `/opt/ms-playwright`)
 
 ## Target Selection
 

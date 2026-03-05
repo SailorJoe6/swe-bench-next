@@ -115,12 +115,15 @@ Current state:
 - Contract/regression validation is recorded in the archived execution plan.
 - No live SWE-Bench instance execution has been run for Phase 5 yet. Treat Phase 5 as implemented but not benchmark-executed.
 - For behavior details, use `docs/implementation/phase5-runner.md`.
+- Phase 5 detached launch policy is `nohup` by default. If running from an AI-agent/managed execution environment that reaps background children, use the documented detached `tmux` fallback in `docs/implementation/phase5-runner.md`.
 - Before running any Phase 5 batch, smoke-test Codex local routing:
 ```bash
+CODEX_HOME="$(pwd)/config/codex-home" \
 codex exec -p local --dangerously-bypass-approvals-and-sandbox \
   "Respond with exactly: CODEX_LOCAL_BRIDGE_OK"
 ```
-- For manual `python -m swebench.harness.run_evaluation` runs, always set `--report_dir` (or run from a results subdirectory) so summary `*.json` reports do not land in repo root.
+- For manual `python -m swebench.harness.run_evaluation` runs, execute from a dedicated output directory (for example `<campaign-root>/evaluations`) because summary `*.json` artifacts may still land in the current working directory even when `--report_dir` is set.
+- For unresolved-campaign phase 5 flows, `scripts/phase5-eval-instance.sh` now derives this automatically as `<campaign-root>/evaluations`.
 
 ## Quality Gates for Script Changes
 

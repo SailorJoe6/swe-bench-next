@@ -13,6 +13,8 @@ As of **February 25, 2026**, this repository has two completed initiatives with 
   - One live SWE-Bench replay/evaluation was run for `google__gson-2024` using a Phase 5-produced patch (resolved).
   - A separate live single-instance integration run against a known Phase 3 failed ID (`preactjs__preact-2896`) exposed MCP startup timeout behavior; root cause and fix were merged on February 25, 2026 (MCP bridge transport compatibility).
   - Metadata bootstrap path in `start-swebench.sh` has been aligned with the Phase 3 multilingual dataset source contract (`swe-bench/SWE-Bench_Multilingual`, split-only load).
+  - On **March 2, 2026**, local Codex profile configuration was updated to use a repo-local base-instructions override (`config/codex-home/prompt.md` via `model_instructions_file`) that enforces MCP-only command/edit/patch flow and explicitly forbids `apply_patch`.
+  - On **March 2, 2026**, local Codex profile configuration was further updated to use a repo-local custom model catalog (`config/codex-home/qwen3-model-catalog.json` via `model_catalog_json`) so Codex uses explicit Qwen3-Coder-Next model metadata and a 262,144-token context window baseline.
   - A full Phase 5 benchmark-scale run has not yet been executed.
 
 ## What "Validated" Means Here

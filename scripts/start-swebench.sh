@@ -10,9 +10,13 @@ CODEX_BIN="${CODEX_BIN:-codex}"
 PYTHON_BIN="${SWE_BENCH_PYTHON_BIN:-}"
 MCP_BRIDGE_SERVER_NAME="swebench_docker_exec"
 INSTANCE_FIXTURE_ENV_VAR="SWE_BENCH_INSTANCES_FILE"
-MAX_LOOPS_DEFAULT=50
+MAX_LOOPS_DEFAULT=20
+MAX_EXCEPTION_LOOPS_DEFAULT=2
+CODEX_PHASE_TIMEOUT_SECONDS_DEFAULT=1800
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CODEX_HOME_DEFAULT="$REPO_ROOT/config/codex-home"
+CODEX_HOME_DIR="${SWE_BENCH_CODEX_HOME:-$CODEX_HOME_DEFAULT}"
 if [[ -z "$PYTHON_BIN" ]]; then
   if [[ -x "$REPO_ROOT/venv/bin/python3" ]]; then
     PYTHON_BIN="$REPO_ROOT/venv/bin/python3"
@@ -22,7 +26,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 MCP_BRIDGE_SCRIPT="$REPO_ROOT/scripts/mcp-docker-exec-server.py"
 PROMPTS_DIR="$REPO_ROOT/ralph/prompts"
-REQUIRED_PROMPTS=(plan.md execute.md handoff.md)
+REQUIRED_PROMPTS=(plan.md execute.md exception.md)
 IMAGE_REPO_PREFIX="sweb.eval.arm64"
 CONTAINER_WORKDIR="${SWE_BENCH_CONTAINER_WORKDIR:-/testbed}"
 RUNTIME_CONTAINER_NAME_PREFIX="swebench-runtime-"
@@ -32,7 +36,10 @@ INSTANCE_ID=""
 OUTPUT_DIR=""
 MANIFEST_DIR=""
 MAX_LOOPS="$MAX_LOOPS_DEFAULT"
+MAX_EXCEPTION_LOOPS="${SWE_BENCH_MAX_EXCEPTION_LOOPS:-$MAX_EXCEPTION_LOOPS_DEFAULT}"
+CODEX_PHASE_TIMEOUT_SECONDS="${SWE_BENCH_CODEX_PHASE_TIMEOUT_SECONDS:-$CODEX_PHASE_TIMEOUT_SECONDS_DEFAULT}"
 RUNTIME_CONTAINER_NAME=""
+CODEX_CONFIG_PATH=""
 
 usage() {
   cat <<USAGE
@@ -44,17 +51,30 @@ Required:
 
 Options:
   --manifest-dir <path>  Run manifest directory (default: --output-dir)
-  --max-loops <n>        Execute-loop pass budget (default: ${MAX_LOOPS_DEFAULT})
+  --max-loops <n>        Total plan+execute pass budget (default: ${MAX_LOOPS_DEFAULT})
+  --max-exception-loops <n>
+                         Exception-phase retries when artifact states mismatch (default: ${MAX_EXCEPTION_LOOPS_DEFAULT})
   -h, --help             Show this help message
 
 Behavior:
   - Single-instance only
   - Codex-only unattended contract (hardcoded: codex -p local)
+  - Per-phase timeout can be tuned via SWE_BENCH_CODEX_PHASE_TIMEOUT_SECONDS
+  - Codex launches with CODEX_HOME from SWE_BENCH_CODEX_HOME (default: config/codex-home)
 USAGE
 }
 
 error() {
   echo "Error: $*" >&2
+}
+
+absolute_path_from_pwd() {
+  local path="$1"
+  if [[ "$path" == /* ]]; then
+    printf '%s' "$path"
+    return 0
+  fi
+  printf '%s/%s' "$PWD" "$path"
 }
 
 timestamp_utc() {
@@ -162,8 +182,9 @@ cleanup_runtime_container() {
 
 create_runtime_container() {
   local image_ref="$1"
-  local output_dir="$2"
-  local instance_id="$3"
+  local host_output_dir="$2"
+  local runtime_output_dir="$3"
+  local instance_id="$4"
   local runtime_name=""
 
   if ! runtime_name="$(runtime_container_name_for_instance "$instance_id")"; then
@@ -177,7 +198,7 @@ create_runtime_container() {
     --name "$runtime_name" \
     --entrypoint /bin/sh \
     --add-host host.docker.internal:host-gateway \
-    -v "$output_dir:$output_dir" \
+    -v "$host_output_dir:$runtime_output_dir" \
     "$image_ref" \
     -lc "while true; do sleep 3600; done" >/dev/null; then
     echo "failed to create runtime container from image: $image_ref" >&2
@@ -192,28 +213,6 @@ create_runtime_container() {
 
   RUNTIME_CONTAINER_NAME="$runtime_name"
   return 0
-}
-
-extract_codex_session_id() {
-  local log_path="$1"
-
-  if [[ ! -f "$log_path" ]]; then
-    return 1
-  fi
-
-  awk '
-    match($0, /session id:[[:space:]]*[^[:space:]]+/) {
-      token = substr($0, RSTART, RLENGTH)
-      sub(/^session id:[[:space:]]*/, "", token)
-      id = token
-    }
-    END {
-      if (length(id) == 0) {
-        exit 1
-      }
-      print id
-    }
-  ' "$log_path"
 }
 
 load_instance_problem_statement() {
@@ -335,13 +334,22 @@ write_status_json() {
   local failure_reason_code="$4"
   local failure_reason_detail="$5"
   local error_log="$6"
+  local failure_reason_detail_file
+  local error_log_file
 
-  "$PYTHON_BIN" - "$status_path" "$instance_id" "$status" "$failure_reason_code" "$failure_reason_detail" "$error_log" <<'PY'
+  failure_reason_detail_file="$(mktemp)"
+  error_log_file="$(mktemp)"
+  printf '%s' "$failure_reason_detail" > "$failure_reason_detail_file"
+  printf '%s' "$error_log" > "$error_log_file"
+
+  if ! "$PYTHON_BIN" - "$status_path" "$instance_id" "$status" "$failure_reason_code" "$failure_reason_detail_file" "$error_log_file" <<'PY'
 import json
 import pathlib
 import sys
 
-status_path, instance_id, status, failure_reason_code, failure_reason_detail, error_log = sys.argv[1:]
+status_path, instance_id, status, failure_reason_code, failure_reason_detail_file, error_log_file = sys.argv[1:]
+failure_reason_detail = pathlib.Path(failure_reason_detail_file).read_text(encoding="utf-8", errors="replace")
+error_log = pathlib.Path(error_log_file).read_text(encoding="utf-8", errors="replace")
 
 payload = {
     "instance_id": instance_id,
@@ -355,19 +363,29 @@ path = pathlib.Path(status_path)
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 PY
+  then
+    rm -f "$failure_reason_detail_file" "$error_log_file"
+    return 1
+  fi
+  rm -f "$failure_reason_detail_file" "$error_log_file"
 }
 
 write_pred_json() {
   local pred_path="$1"
   local instance_id="$2"
   local model_patch="$3"
+  local model_patch_file
 
-  "$PYTHON_BIN" - "$pred_path" "$instance_id" "$MODEL_NAME_OR_PATH" "$model_patch" <<'PY'
+  model_patch_file="$(mktemp)"
+  printf '%s' "$model_patch" > "$model_patch_file"
+
+  if ! "$PYTHON_BIN" - "$pred_path" "$instance_id" "$MODEL_NAME_OR_PATH" "$model_patch_file" <<'PY'
 import json
 import pathlib
 import sys
 
-pred_path, instance_id, model_name_or_path, model_patch = sys.argv[1:]
+pred_path, instance_id, model_name_or_path, model_patch_file = sys.argv[1:]
+model_patch = pathlib.Path(model_patch_file).read_text(encoding="utf-8", errors="replace")
 
 payload = {
     "model_name_or_path": model_name_or_path,
@@ -379,6 +397,11 @@ path = pathlib.Path(pred_path)
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
+  then
+    rm -f "$model_patch_file"
+    return 1
+  fi
+  rm -f "$model_patch_file"
 }
 
 update_manifest() {
@@ -391,8 +414,15 @@ update_manifest() {
   local failure_reason_detail="$7"
   local error_log="$8"
   local output_dir="$9"
+  local failure_reason_detail_file
+  local error_log_file
 
-  "$PYTHON_BIN" - "$manifest_path" "$instance_id" "$start_time" "$end_time" "$status" "$failure_reason_code" "$failure_reason_detail" "$error_log" "$output_dir" "$DATASET_NAME" "$DATASET_SUBSET" "$DATASET_SPLIT" "$CODEX_PROFILE" "$MAX_LOOPS" <<'PY'
+  failure_reason_detail_file="$(mktemp)"
+  error_log_file="$(mktemp)"
+  printf '%s' "$failure_reason_detail" > "$failure_reason_detail_file"
+  printf '%s' "$error_log" > "$error_log_file"
+
+  if ! "$PYTHON_BIN" - "$manifest_path" "$instance_id" "$start_time" "$end_time" "$status" "$failure_reason_code" "$failure_reason_detail_file" "$error_log_file" "$output_dir" "$DATASET_NAME" "$DATASET_SUBSET" "$DATASET_SPLIT" "$CODEX_PROFILE" "$MAX_LOOPS" <<'PY'
 import json
 import pathlib
 import sys
@@ -404,8 +434,8 @@ import sys
     end_time,
     status,
     failure_reason_code,
-    failure_reason_detail,
-    error_log,
+    failure_reason_detail_file,
+    error_log_file,
     output_dir,
     dataset_name,
     dataset_subset,
@@ -413,6 +443,8 @@ import sys
     codex_profile,
     max_loops,
 ) = sys.argv[1:]
+failure_reason_detail = pathlib.Path(failure_reason_detail_file).read_text(encoding="utf-8", errors="replace")
+error_log = pathlib.Path(error_log_file).read_text(encoding="utf-8", errors="replace")
 
 manifest_file = pathlib.Path(manifest_path)
 manifest_file.parent.mkdir(parents=True, exist_ok=True)
@@ -476,11 +508,11 @@ data["last_invocation"] = {
 
 manifest_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
-}
-
-codex_phase_log_path() {
-  local phase="$1"
-  echo "$OUTPUT_DIR/logs/codex_${phase}.log"
+  then
+    rm -f "$failure_reason_detail_file" "$error_log_file"
+    return 1
+  fi
+  rm -f "$failure_reason_detail_file" "$error_log_file"
 }
 
 phase_failure_context() {
@@ -495,7 +527,6 @@ phase_failure_context() {
 collect_phase_failure_error_log() {
   local phase="$1"
   local runtime_err_path="$2"
-  local phase_log=""
   local phase_log_tail=""
   local combined=""
 
@@ -503,13 +534,12 @@ collect_phase_failure_error_log() {
     combined="$(cat "$runtime_err_path")"
   fi
 
-  phase_log="$(codex_phase_log_path "$phase")"
-  if [[ -f "$phase_log" ]] && [[ -s "$phase_log" ]]; then
-    phase_log_tail="$(tail -n 200 "$phase_log")"
+  if [[ -f "$CODEX_RUN_LOG_PATH" ]] && [[ -s "$CODEX_RUN_LOG_PATH" ]]; then
+    phase_log_tail="$(tail -n 200 "$CODEX_RUN_LOG_PATH")"
     if [[ -n "$combined" ]]; then
       combined+=$'\n'
     fi
-    combined+="[codex_${phase}.log tail]"$'\n'"${phase_log_tail}"
+    combined+="[codex_run.log tail]"$'\n'"${phase_log_tail}"
   fi
 
   printf '%s' "$combined"
@@ -525,6 +555,26 @@ set_mcp_phase_failure() {
   FAILURE_REASON_CODE="runtime_error"
   FAILURE_REASON_DETAIL="${message} ($(phase_failure_context "$phase" "$pass_index"))."
   ERROR_LOG="$(collect_phase_failure_error_log "$phase" "$runtime_err_path")"
+}
+
+log_phase_warning() {
+  local phase="$1"
+  local pass_index="$2"
+  local message="$3"
+  local runtime_err_path="$4"
+  local warning_detail=""
+  local warning_log_body=""
+
+  warning_detail="${message} ($(phase_failure_context "$phase" "$pass_index"))."
+  warning_log_body="$(collect_phase_failure_error_log "$phase" "$runtime_err_path")"
+
+  {
+    printf '[%s] %s\n' "$(timestamp_utc)" "$warning_detail"
+    if [[ -n "$warning_log_body" ]]; then
+      printf '%s\n' "$warning_log_body"
+    fi
+    printf '\n'
+  } >> "$RUNTIME_WARN_PATH"
 }
 
 toml_quote_string() {
@@ -560,13 +610,13 @@ run_codex_phase() {
   local phase="$1"
   local pass_index="$2"
   local prompt_path="$3"
-  local resume_session_id="${4:-}"
-  local phase_log
+  local loop_index="${4:-$pass_index}"
+  local header_title=""
   local prompt_text
+  local phase_exit_code=0
   local -a codex_cmd
   local -a codex_env_vars
 
-  phase_log="$(codex_phase_log_path "$phase")"
   prompt_text="$(render_prompt_template "$prompt_path" "$phase" "$pass_index")"
 
   if [[ -z "$RUNTIME_CONTAINER_NAME" ]]; then
@@ -574,48 +624,68 @@ run_codex_phase() {
     return 1
   fi
 
-  if [[ "$phase" == "handoff" ]]; then
-    if [[ -z "$resume_session_id" ]]; then
-      echo "handoff phase requires execute session id for resume" >&2
-      return 1
-    fi
-    codex_cmd=(
-      "$CODEX_BIN"
-      exec
-      -p "$CODEX_PROFILE"
-      --dangerously-bypass-approvals-and-sandbox
-    )
-    append_codex_config_overrides codex_cmd
-    codex_cmd+=(resume "$resume_session_id" "$prompt_text")
-  else
-    codex_cmd=(
-      "$CODEX_BIN"
-      exec
-      -p "$CODEX_PROFILE"
-      --dangerously-bypass-approvals-and-sandbox
-    )
-    append_codex_config_overrides codex_cmd
-    codex_cmd+=("$prompt_text")
-  fi
+  codex_cmd=(
+    "$CODEX_BIN"
+    exec
+    -p "$CODEX_PROFILE"
+    --dangerously-bypass-approvals-and-sandbox
+  )
+  append_codex_config_overrides codex_cmd
+  codex_cmd+=("$prompt_text")
 
   printf 'phase=%s pass=%s runtime_container=%s mcp_server=%s cmd=%s exec -p %s --dangerously-bypass-approvals-and-sandbox -c features.shell_tool=false -c features.unified_exec=false -c mcp_servers={} -c mcp_servers.%s.command="python3" -c mcp_servers.%s.args=[%s,"--container-name",%s,"--workdir",%s] <prompt:%s>\n' \
     "$phase" "$pass_index" "$RUNTIME_CONTAINER_NAME" "$MCP_BRIDGE_SERVER_NAME" "$CODEX_BIN" "$CODEX_PROFILE" "$MCP_BRIDGE_SERVER_NAME" "$MCP_BRIDGE_SERVER_NAME" "$(toml_quote_string "$MCP_BRIDGE_SCRIPT")" "$(toml_quote_string "$RUNTIME_CONTAINER_NAME")" "$(toml_quote_string "$CONTAINER_WORKDIR")" "$prompt_path" >> "$OUTPUT_DIR/logs/codex_command.txt"
 
   codex_env_vars=(
+    "CODEX_HOME=$CODEX_HOME_DIR"
     "SWE_BENCH_RUNTIME_PHASE=$phase"
     "SWE_BENCH_EXECUTE_PASS=$pass_index"
     "SWE_BENCH_INSTANCE_ID=$INSTANCE_ID"
-    "SWE_BENCH_OUTPUT_DIR=$OUTPUT_DIR"
-    "SWE_BENCH_PLANS_DIR=$PLANS_DIR"
-    "SWE_BENCH_SPEC_PATH=$SPEC_PATH"
-    "SWE_BENCH_PLAN_PATH=$PLAN_PATH"
-    "SWE_BENCH_ARCHIVE_DIR=$ARCHIVE_DIR"
-    "SWE_BENCH_BLOCKED_DIR=$BLOCKED_DIR"
-    "SWE_BENCH_PATCH_PATH=$PATCH_PATH"
+    "SWE_BENCH_OUTPUT_DIR=$RUNTIME_OUTPUT_DIR"
+    "SWE_BENCH_PLANS_DIR=$RUNTIME_PLANS_DIR"
+    "SWE_BENCH_SPEC_PATH=$RUNTIME_SPEC_PATH"
+    "SWE_BENCH_PLAN_PATH=$RUNTIME_PLAN_PATH"
+    "SWE_BENCH_ARCHIVE_DIR=$RUNTIME_ARCHIVE_DIR"
+    "SWE_BENCH_BLOCKED_DIR=$RUNTIME_BLOCKED_DIR"
+    "SWE_BENCH_PATCH_PATH=$RUNTIME_PATCH_PATH"
+    "SWE_BENCH_CODE_DIR=$CONTAINER_WORKDIR"
+    "SWE_BENCH_HOST_OUTPUT_DIR=$OUTPUT_DIR"
+    "SWE_BENCH_HOST_PLANS_DIR=$PLANS_DIR"
+    "SWE_BENCH_HOST_SPEC_PATH=$SPEC_PATH"
+    "SWE_BENCH_HOST_PLAN_PATH=$PLAN_PATH"
+    "SWE_BENCH_HOST_ARCHIVE_DIR=$ARCHIVE_DIR"
+    "SWE_BENCH_HOST_BLOCKED_DIR=$BLOCKED_DIR"
+    "SWE_BENCH_HOST_PATCH_PATH=$PATCH_STAGING_PATH"
     "SWE_BENCH_IMAGE_REF=$IMAGE_REF"
   )
 
-  env "${codex_env_vars[@]}" "${codex_cmd[@]}" >>"$phase_log" 2>&1
+  case "$phase" in
+    plan) header_title="Loop #${loop_index} - Plan Mode" ;;
+    execute) header_title="Loop #${loop_index} - Execute Mode" ;;
+    exception) header_title="Exception #${loop_index}" ;;
+    *) header_title="Phase ${phase}" ;;
+  esac
+  {
+    printf '\n=== %s ===\n' "$header_title"
+    printf '[%s] phase=%s pass=%s\n' "$(timestamp_utc)" "$phase" "$pass_index"
+  } >> "$CODEX_RUN_LOG_PATH"
+
+  set +e
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=30s "${CODEX_PHASE_TIMEOUT_SECONDS}s" \
+      env "${codex_env_vars[@]}" "${codex_cmd[@]}" 2>&1 | tee -a "$CODEX_RUN_LOG_PATH"
+  else
+    env "${codex_env_vars[@]}" "${codex_cmd[@]}" 2>&1 | tee -a "$CODEX_RUN_LOG_PATH"
+  fi
+  phase_exit_code=$?
+  set -e
+
+  if [[ "$phase_exit_code" -eq 124 ]]; then
+    printf 'codex phase timed out after %ss (phase=%s pass=%s)\n' \
+      "$CODEX_PHASE_TIMEOUT_SECONDS" "$phase" "$pass_index" >&2
+  fi
+
+  return "$phase_exit_code"
 }
 
 replace_prompt_var() {
@@ -643,13 +713,14 @@ render_prompt_template() {
   rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_RUNTIME_PHASE" "$phase")"
   rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_EXECUTE_PASS" "$pass_index")"
   rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_INSTANCE_ID" "$INSTANCE_ID")"
-  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_OUTPUT_DIR" "$OUTPUT_DIR")"
-  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_PLANS_DIR" "$PLANS_DIR")"
-  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_SPEC_PATH" "$SPEC_PATH")"
-  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_PLAN_PATH" "$PLAN_PATH")"
-  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_ARCHIVE_DIR" "$ARCHIVE_DIR")"
-  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_BLOCKED_DIR" "$BLOCKED_DIR")"
-  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_PATCH_PATH" "$PATCH_PATH")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_OUTPUT_DIR" "$RUNTIME_OUTPUT_DIR")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_PLANS_DIR" "$RUNTIME_PLANS_DIR")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_SPEC_PATH" "$RUNTIME_SPEC_PATH")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_PLAN_PATH" "$RUNTIME_PLAN_PATH")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_ARCHIVE_DIR" "$RUNTIME_ARCHIVE_DIR")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_BLOCKED_DIR" "$RUNTIME_BLOCKED_DIR")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_PATCH_PATH" "$RUNTIME_PATCH_PATH")"
+  rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_CODE_DIR" "$CONTAINER_WORKDIR")"
   rendered_text="$(replace_prompt_var "$rendered_text" "SWE_BENCH_IMAGE_REF" "$IMAGE_REF")"
   printf '%s' "$rendered_text"
 }
@@ -684,6 +755,234 @@ root_plan_state() {
   echo "missing_both"
 }
 
+doc_location_state() {
+  local root_path="$1"
+  local archive_path="$2"
+  local blocked_path="$3"
+  local count=0
+  local value=""
+
+  if [[ -f "$root_path" ]]; then
+    count=$((count + 1))
+    value="root"
+  fi
+  if [[ -f "$archive_path" ]]; then
+    count=$((count + 1))
+    value="archive"
+  fi
+  if [[ -f "$blocked_path" ]]; then
+    count=$((count + 1))
+    value="blocked"
+  fi
+
+  if [[ "$count" -eq 0 ]]; then
+    echo "missing"
+    return 0
+  fi
+  if [[ "$count" -eq 1 ]]; then
+    echo "$value"
+    return 0
+  fi
+  echo "duplicate"
+}
+
+doc_pair_state() {
+  local spec_state
+  local plan_state
+  spec_state="$(doc_location_state "$SPEC_PATH" "$ARCHIVE_SPEC_PATH" "$BLOCKED_SPEC_PATH")"
+  plan_state="$(doc_location_state "$PLAN_PATH" "$ARCHIVE_PLAN_PATH" "$BLOCKED_PLAN_PATH")"
+
+  if [[ "$spec_state" == "duplicate" || "$plan_state" == "duplicate" ]]; then
+    echo "duplicate"
+    return 0
+  fi
+  if [[ "$spec_state" == "missing" && "$plan_state" == "missing" ]]; then
+    echo "missing_both"
+    return 0
+  fi
+  if [[ "$spec_state" == "root" && "$plan_state" == "root" ]]; then
+    echo "root_pair"
+    return 0
+  fi
+  if [[ "$spec_state" == "root" && "$plan_state" == "missing" ]]; then
+    echo "spec_only_root"
+    return 0
+  fi
+  if [[ "$spec_state" == "missing" && "$plan_state" == "root" ]]; then
+    echo "plan_only_root"
+    return 0
+  fi
+  if [[ "$spec_state" == "archive" && "$plan_state" == "archive" ]]; then
+    echo "archive_pair"
+    return 0
+  fi
+  if [[ "$spec_state" == "blocked" && "$plan_state" == "blocked" ]]; then
+    echo "blocked_pair"
+    return 0
+  fi
+  echo "split_or_partial"
+}
+
+effective_patch_path() {
+  if [[ -f "$PATCH_PATH" ]]; then
+    printf '%s' "$PATCH_PATH"
+    return 0
+  fi
+  if [[ -f "$PATCH_STAGING_PATH" ]]; then
+    printf '%s' "$PATCH_STAGING_PATH"
+    return 0
+  fi
+  return 1
+}
+
+patch_has_non_whitespace() {
+  local patch_path="$1"
+  "$PYTHON_BIN" - "$patch_path" <<'PY'
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+print("1" if text.strip() else "0")
+PY
+}
+
+has_non_empty_patch_artifact() {
+  local patch_source=""
+  if ! patch_source="$(effective_patch_path)"; then
+    echo "0"
+    return 0
+  fi
+  patch_has_non_whitespace "$patch_source"
+}
+
+finalize_patch_artifact() {
+  local patch_source=""
+  if ! patch_source="$(effective_patch_path)"; then
+    return 1
+  fi
+  if [[ "$(patch_has_non_whitespace "$patch_source")" != "1" ]]; then
+    return 1
+  fi
+  if [[ "$patch_source" != "$PATCH_PATH" ]]; then
+    mv "$patch_source" "$PATCH_PATH"
+  fi
+  return 0
+}
+
+mark_failure() {
+  local detail="$1"
+  local reason_code="${2:-runtime_error}"
+  local error_log="${3:-}"
+  STATUS="failed"
+  FAILURE_REASON_CODE="$reason_code"
+  FAILURE_REASON_DETAIL="$detail"
+  ERROR_LOG="$error_log"
+}
+
+mark_patch_driven_outcome() {
+  local context="$1"
+  local has_patch="$2"
+  if [[ "$has_patch" == "1" ]]; then
+    if ! finalize_patch_artifact; then
+      mark_failure "Failed to finalize patch artifact for ${INSTANCE_ID}" "runtime_error" "Unable to finalize patch from ${PATCH_STAGING_PATH} or ${PATCH_PATH}"
+      return 0
+    fi
+    mark_success
+    return 0
+  fi
+  mark_failure "${context}; no non-empty patch artifact."
+}
+
+run_exception_phase() {
+  local trigger_context="$1"
+  local exception_attempt=0
+  local state=""
+  local has_patch=""
+
+  while [[ "$exception_attempt" -lt "$MAX_EXCEPTION_LOOPS" ]]; do
+    exception_attempt=$((exception_attempt + 1))
+    EXCEPTION_PASSES_RUN=$((EXCEPTION_PASSES_RUN + 1))
+
+    if ! run_codex_phase "exception" "$EXCEPTION_PASSES_RUN" "$EXCEPTION_PROMPT_PATH" "$exception_attempt" 2>"$RUNTIME_ERR_PATH"; then
+      log_phase_warning "exception" "$EXCEPTION_PASSES_RUN" "Exception prompt exited non-zero for ${INSTANCE_ID}; retrying within exception budget" "$RUNTIME_ERR_PATH"
+    fi
+
+    state="$(doc_pair_state)"
+    has_patch="$(has_non_empty_patch_artifact)"
+
+    if [[ "$state" == "archive_pair" && "$has_patch" == "1" ]]; then
+      mark_patch_driven_outcome "Exception resolved to archive+patch (${trigger_context})" "$has_patch"
+      return 0
+    fi
+    if [[ "$state" == "blocked_pair" && "$has_patch" == "1" ]]; then
+      # Requested behavior: blocked+patch is a prediction success; leave docs as-is.
+      mark_patch_driven_outcome "Exception resolved to blocked+patch (${trigger_context})" "$has_patch"
+      return 0
+    fi
+    if [[ "$state" == "blocked_pair" && "$has_patch" == "0" ]]; then
+      mark_failure "Planning docs moved to blocked without patch during exception phase."
+      return 0
+    fi
+
+    if [[ "$state" == "root_pair" && "$has_patch" == "0" ]]; then
+      continue
+    fi
+
+    mark_patch_driven_outcome "Exception phase terminal artifact state (${state}; ${trigger_context})" "$has_patch"
+    return 0
+  done
+
+  state="$(doc_pair_state)"
+  has_patch="$(has_non_empty_patch_artifact)"
+  mark_patch_driven_outcome "Exception phase exhausted after ${MAX_EXCEPTION_LOOPS} attempt(s) (${state}; ${trigger_context})" "$has_patch"
+}
+
+evaluate_artifacts_state() {
+  local context="$1"
+  local allow_exception="$2"
+  local state=""
+  local has_patch=""
+
+  state="$(doc_pair_state)"
+  has_patch="$(has_non_empty_patch_artifact)"
+
+  if [[ "$state" == "archive_pair" && "$has_patch" == "1" ]]; then
+    mark_patch_driven_outcome "Archive+patch detected (${context})" "$has_patch"
+    return 0
+  fi
+  if [[ "$state" == "blocked_pair" && "$has_patch" == "1" ]]; then
+    # Requested behavior: blocked+patch is a prediction success; leave docs as-is.
+    mark_patch_driven_outcome "Blocked+patch detected (${context})" "$has_patch"
+    return 0
+  fi
+  if [[ "$state" == "blocked_pair" && "$has_patch" == "0" ]]; then
+    mark_failure "Planning docs moved to blocked without patch."
+    return 0
+  fi
+
+  if [[ "$allow_exception" == "1" ]]; then
+    if [[ "$state" == "archive_pair" && "$has_patch" == "0" ]]; then
+      run_exception_phase "${context}: archive without patch"
+      return 0
+    fi
+    if [[ "$state" == "root_pair" && "$has_patch" == "1" ]]; then
+      run_exception_phase "${context}: patch without archived docs"
+      return 0
+    fi
+  fi
+
+  if [[ "$state" == "root_pair" && "$has_patch" == "0" ]]; then
+    return 1
+  fi
+  if [[ "$state" == "spec_only_root" && "$has_patch" == "0" ]]; then
+    return 1
+  fi
+
+  # Edge/ambiguous states: patch presence decides success/failure, then exit.
+  mark_patch_driven_outcome "Terminal edge artifact state (${state}; ${context})" "$has_patch"
+  return 0
+}
+
 mark_success() {
   STATUS="success"
   FAILURE_REASON_CODE="null"
@@ -711,6 +1010,11 @@ while [[ $# -gt 0 ]]; do
     --max-loops)
       [[ $# -ge 2 ]] || { error "--max-loops requires a value"; exit 2; }
       MAX_LOOPS="$2"
+      shift 2
+      ;;
+    --max-exception-loops)
+      [[ $# -ge 2 ]] || { error "--max-exception-loops requires a value"; exit 2; }
+      MAX_EXCEPTION_LOOPS="$2"
       shift 2
       ;;
     --profile|--codex-profile|--interactive|--claude)
@@ -746,15 +1050,31 @@ if ! is_positive_integer "$MAX_LOOPS"; then
   exit 2
 fi
 
+if ! is_positive_integer "$MAX_EXCEPTION_LOOPS"; then
+  error "--max-exception-loops must be a positive integer"
+  exit 2
+fi
+
+if ! is_positive_integer "$CODEX_PHASE_TIMEOUT_SECONDS"; then
+  error "SWE_BENCH_CODEX_PHASE_TIMEOUT_SECONDS must be a positive integer"
+  exit 2
+fi
+
 if [[ -z "$MANIFEST_DIR" ]]; then
   MANIFEST_DIR="$OUTPUT_DIR"
 fi
+
+OUTPUT_DIR="$(absolute_path_from_pwd "$OUTPUT_DIR")"
+MANIFEST_DIR="$(absolute_path_from_pwd "$MANIFEST_DIR")"
+CODEX_HOME_DIR="$(absolute_path_from_pwd "$CODEX_HOME_DIR")"
+CODEX_CONFIG_PATH="$CODEX_HOME_DIR/config.toml"
 
 mkdir -p "$OUTPUT_DIR" "$MANIFEST_DIR" "$OUTPUT_DIR/logs" "$OUTPUT_DIR/plans/archive" "$OUTPUT_DIR/plans/blocked"
 
 STATUS_PATH="$OUTPUT_DIR/${INSTANCE_ID}.status.json"
 PRED_PATH="$OUTPUT_DIR/${INSTANCE_ID}.pred"
 PATCH_PATH="$OUTPUT_DIR/${INSTANCE_ID}.patch"
+PATCH_STAGING_PATH="$OUTPUT_DIR/.${INSTANCE_ID}.patch.tmp"
 MANIFEST_PATH="$MANIFEST_DIR/run_manifest.json"
 PLANS_DIR="$OUTPUT_DIR/plans"
 SPEC_PATH="$PLANS_DIR/SPECIFICATION.md"
@@ -765,24 +1085,36 @@ ARCHIVE_SPEC_PATH="$ARCHIVE_DIR/SPECIFICATION.md"
 ARCHIVE_PLAN_PATH="$ARCHIVE_DIR/EXECUTION_PLAN.md"
 BLOCKED_SPEC_PATH="$BLOCKED_DIR/SPECIFICATION.md"
 BLOCKED_PLAN_PATH="$BLOCKED_DIR/EXECUTION_PLAN.md"
+RUNTIME_OUTPUT_DIR="$OUTPUT_DIR"
+RUNTIME_PLANS_DIR="$RUNTIME_OUTPUT_DIR/plans"
+RUNTIME_SPEC_PATH="$RUNTIME_PLANS_DIR/SPECIFICATION.md"
+RUNTIME_PLAN_PATH="$RUNTIME_PLANS_DIR/EXECUTION_PLAN.md"
+RUNTIME_ARCHIVE_DIR="$RUNTIME_PLANS_DIR/archive"
+RUNTIME_BLOCKED_DIR="$RUNTIME_PLANS_DIR/blocked"
+RUNTIME_PATCH_PATH="$RUNTIME_OUTPUT_DIR/.${INSTANCE_ID}.patch.tmp"
 METADATA_LOAD_ERR_PATH="$OUTPUT_DIR/logs/instance_metadata_error.log"
 IMAGE_PRECHECK_ERR_PATH="$OUTPUT_DIR/logs/image_precheck_error.log"
 IMAGE_REF="$(instance_image_ref "$INSTANCE_ID")"
 PLAN_PROMPT_PATH="$PROMPTS_DIR/plan.md"
 EXECUTE_PROMPT_PATH="$PROMPTS_DIR/execute.md"
-HANDOFF_PROMPT_PATH="$PROMPTS_DIR/handoff.md"
+EXCEPTION_PROMPT_PATH="$PROMPTS_DIR/exception.md"
 RUNTIME_ERR_PATH="$OUTPUT_DIR/logs/runtime_error.log"
+RUNTIME_WARN_PATH="$OUTPUT_DIR/logs/runtime_warning.log"
 RUNTIME_CONTAINER_ERR_PATH="$OUTPUT_DIR/logs/runtime_container_error.log"
 MCP_BRIDGE_PRECHECK_ERR_PATH="$OUTPUT_DIR/logs/mcp_bridge_precheck_error.log"
+CODEX_RUN_LOG_PATH="$OUTPUT_DIR/logs/codex_run.log"
 
 START_TIME="$(timestamp_utc)"
 ERROR_LOG=""
-STATUS="incomplete"
-FAILURE_REASON_CODE="incomplete"
-FAILURE_REASON_DETAIL="Execute loop budget exhausted without patch."
+STATUS="running"
+FAILURE_REASON_CODE="runtime_error"
+FAILURE_REASON_DETAIL="Phase loop budget exhausted without patch."
 MODEL_PATCH=""
 MISSING_PROMPTS=""
 PROBLEM_STATEMENT=""
+
+: > "$RUNTIME_ERR_PATH"
+: > "$RUNTIME_WARN_PATH"
 
 trap cleanup_runtime_container EXIT
 
@@ -800,6 +1132,13 @@ if [[ "$STATUS" != "failed" ]] && ! ensure_python_available; then
   ERROR_LOG="$PYTHON_BIN"
 fi
 
+if [[ "$STATUS" != "failed" ]] && [[ ! -f "$CODEX_CONFIG_PATH" ]]; then
+  STATUS="failed"
+  FAILURE_REASON_CODE="runtime_error"
+  FAILURE_REASON_DETAIL="Missing codex config.toml under CODEX_HOME"
+  ERROR_LOG="$CODEX_CONFIG_PATH"
+fi
+
 if [[ "$STATUS" != "failed" ]] && ! PROBLEM_STATEMENT="$(load_instance_problem_statement "$INSTANCE_ID" 2>"$METADATA_LOAD_ERR_PATH")"; then
   STATUS="failed"
   FAILURE_REASON_CODE="runtime_error"
@@ -809,7 +1148,7 @@ if [[ "$STATUS" != "failed" ]] && ! PROBLEM_STATEMENT="$(load_instance_problem_s
   fi
 fi
 
-if [[ "$STATUS" != "failed" ]]; then
+if [[ "$STATUS" != "failed" ]] && [[ ! -f "$SPEC_PATH" ]] && [[ ! -f "$ARCHIVE_SPEC_PATH" ]] && [[ ! -f "$BLOCKED_SPEC_PATH" ]]; then
   seed_spec_doc "$SPEC_PATH" "$PROBLEM_STATEMENT"
 fi
 
@@ -842,7 +1181,7 @@ if [[ "$STATUS" != "failed" ]] && ! check_instance_image_exists "$IMAGE_REF" 2>"
 fi
 
 if [[ "$STATUS" != "failed" ]]; then
-  if ! create_runtime_container "$IMAGE_REF" "$OUTPUT_DIR" "$INSTANCE_ID" 2>"$RUNTIME_CONTAINER_ERR_PATH"; then
+  if ! create_runtime_container "$IMAGE_REF" "$OUTPUT_DIR" "$RUNTIME_OUTPUT_DIR" "$INSTANCE_ID" 2>"$RUNTIME_CONTAINER_ERR_PATH"; then
     STATUS="failed"
     FAILURE_REASON_CODE="runtime_error"
     FAILURE_REASON_DETAIL="Failed to create runtime container for image: ${IMAGE_REF}"
@@ -854,90 +1193,80 @@ fi
 
 if [[ "$STATUS" != "failed" ]]; then
   : > "$OUTPUT_DIR/logs/codex_command.txt"
+  : > "$RUNTIME_WARN_PATH"
 fi
 
-: > "$PATCH_PATH"
+# Reset any prior patch artifacts when reusing an output directory.
+rm -f "$PATCH_PATH" "$PATCH_STAGING_PATH"
 EXECUTE_PASSES_RUN=0
+PLAN_PASSES_RUN=0
+EXCEPTION_PASSES_RUN=0
+TOTAL_PHASE_PASSES_RUN=0
 if [[ "$STATUS" != "failed" ]]; then
   while true; do
+    if ! evaluate_artifacts_state "pre-phase check" "1"; then
+      :
+    else
+      break
+    fi
+
+    if [[ "$TOTAL_PHASE_PASSES_RUN" -ge "$MAX_LOOPS" ]]; then
+      mark_failure "Phase pass budget exhausted without patch after ${MAX_LOOPS} plan/execute pass(es)." "runtime_error"
+      break
+    fi
+
     LOOP_STATE="$(root_plan_state)"
 
     if [[ "$LOOP_STATE" == "spec_only" ]]; then
-      if ! run_codex_phase "plan" "0" "$PLAN_PROMPT_PATH" 2>"$RUNTIME_ERR_PATH"; then
-        set_mcp_phase_failure "plan" "0" "Plan prompt execution failed for ${INSTANCE_ID}" "$RUNTIME_ERR_PATH"
-        break
-      fi
-
-      POST_PLAN_STATE="$(root_plan_state)"
-      if [[ "$POST_PLAN_STATE" != "spec_and_plan" ]]; then
-        STATUS="failed"
-        FAILURE_REASON_CODE="runtime_error"
-        FAILURE_REASON_DETAIL="Plan phase ended with invalid planning-doc state (${POST_PLAN_STATE})."
-        ERROR_LOG=""
-        break
+      PLAN_PASSES_RUN=$((PLAN_PASSES_RUN + 1))
+      TOTAL_PHASE_PASSES_RUN=$((TOTAL_PHASE_PASSES_RUN + 1))
+      if ! run_codex_phase "plan" "$PLAN_PASSES_RUN" "$PLAN_PROMPT_PATH" "$PLAN_PASSES_RUN" 2>"$RUNTIME_ERR_PATH"; then
+        log_phase_warning "plan" "$PLAN_PASSES_RUN" "Plan prompt exited non-zero for ${INSTANCE_ID}; continuing within total pass budget" "$RUNTIME_ERR_PATH"
       fi
       continue
     fi
 
-    if [[ "$LOOP_STATE" != "spec_and_plan" ]]; then
-      STATUS="failed"
-      FAILURE_REASON_CODE="runtime_error"
-      FAILURE_REASON_DETAIL="Planning docs are not in root plans directory before execute (${LOOP_STATE})."
-      ERROR_LOG=""
-      break
-    fi
+    if [[ "$LOOP_STATE" == "spec_and_plan" ]]; then
+      pass=$((EXECUTE_PASSES_RUN + 1))
+      EXECUTE_PASSES_RUN="$pass"
+      TOTAL_PHASE_PASSES_RUN=$((TOTAL_PHASE_PASSES_RUN + 1))
 
-    if [[ "$EXECUTE_PASSES_RUN" -ge "$MAX_LOOPS" ]]; then
-      STATUS="incomplete"
-      FAILURE_REASON_CODE="incomplete"
-      FAILURE_REASON_DETAIL="Planning docs remain in root plans directory after execute budget."
-      ERROR_LOG=""
-      break
-    fi
-
-    pass=$((EXECUTE_PASSES_RUN + 1))
-    EXECUTE_PASSES_RUN="$pass"
-
-    if ! run_codex_phase "execute" "$pass" "$EXECUTE_PROMPT_PATH" 2>"$RUNTIME_ERR_PATH"; then
-      set_mcp_phase_failure "execute" "$pass" "Execute prompt failed for ${INSTANCE_ID}" "$RUNTIME_ERR_PATH"
-      break
-    fi
-
-    if [[ -s "$PATCH_PATH" ]]; then
-      mark_success
-      break
-    fi
-
-    POST_EXECUTE_STATE="$(root_plan_state)"
-    if [[ "$POST_EXECUTE_STATE" == "spec_and_plan" ]]; then
-      EXECUTE_SESSION_ID="$(extract_codex_session_id "$(codex_phase_log_path "execute")" || true)"
-      if [[ -z "$EXECUTE_SESSION_ID" ]]; then
-        STATUS="failed"
-        FAILURE_REASON_CODE="runtime_error"
-        FAILURE_REASON_DETAIL="Unable to resolve execute session id for handoff resume for ${INSTANCE_ID} ($(phase_failure_context "execute" "$pass"))."
-        ERROR_LOG="Missing execute session id in $(codex_phase_log_path "execute")"
-        break
-      fi
-
-      if ! run_codex_phase "handoff" "$pass" "$HANDOFF_PROMPT_PATH" "$EXECUTE_SESSION_ID" 2>"$RUNTIME_ERR_PATH"; then
-        set_mcp_phase_failure "handoff" "$pass" "Handoff prompt failed for ${INSTANCE_ID}" "$RUNTIME_ERR_PATH"
-        break
+      if ! run_codex_phase "execute" "$pass" "$EXECUTE_PROMPT_PATH" "$pass" 2>"$RUNTIME_ERR_PATH"; then
+        log_phase_warning "execute" "$pass" "Execute prompt exited non-zero for ${INSTANCE_ID}; continuing within total pass budget" "$RUNTIME_ERR_PATH"
       fi
       continue
     fi
 
-    STATUS="failed"
-    FAILURE_REASON_CODE="runtime_error"
-    FAILURE_REASON_DETAIL="Execute completed without patch and planning docs left root plans directory (${POST_EXECUTE_STATE})."
-    ERROR_LOG=""
+    if [[ "$LOOP_STATE" == "plan_only" ]]; then
+      mark_failure "Root plan state is plan_only without specification."
+      break
+    fi
+
+    if [[ "$LOOP_STATE" == "missing_both" ]]; then
+      # Missing-both is resolved by artifact policy above; reaching here indicates no patch.
+      mark_failure "Both planning docs are missing and no non-empty patch is present."
+      break
+    fi
+
+    mark_failure "Unexpected root plan state: ${LOOP_STATE}"
     break
   done
+fi
+
+if [[ "$STATUS" == "success" ]]; then
+  if ! finalize_patch_artifact; then
+    mark_failure "Failed to finalize patch artifact for ${INSTANCE_ID}" "runtime_error" "Unable to finalize patch from ${PATCH_STAGING_PATH} or ${PATCH_PATH}"
+  fi
 fi
 
 if [[ "$STATUS" == "success" ]]; then
   MODEL_PATCH="$(cat "$PATCH_PATH")"
 else
   MODEL_PATCH=""
+  rm -f "$PATCH_STAGING_PATH" "$PATCH_PATH"
+  if [[ -z "$ERROR_LOG" ]] && [[ -f "$RUNTIME_WARN_PATH" ]] && [[ -s "$RUNTIME_WARN_PATH" ]]; then
+    ERROR_LOG="$(cat "$RUNTIME_WARN_PATH")"
+  fi
 fi
 
 write_pred_json "$PRED_PATH" "$INSTANCE_ID" "$MODEL_PATCH"
@@ -955,5 +1284,5 @@ if [[ "$STATUS" == "success" ]]; then
   exit 0
 fi
 
-echo "start-swebench completed for ${INSTANCE_ID}; status=incomplete"
-exit 20
+echo "start-swebench completed for ${INSTANCE_ID}; status=${STATUS}"
+exit 1

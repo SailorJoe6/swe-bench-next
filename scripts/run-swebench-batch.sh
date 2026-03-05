@@ -6,7 +6,8 @@ DATASET_SUBSET="multilingual"
 DATASET_SPLIT="test"
 MODEL_NAME_OR_PATH="qwen3-coder-next-FP8,codex,ralph"
 INSTANCE_FIXTURE_ENV_VAR="SWE_BENCH_INSTANCES_FILE"
-MAX_LOOPS_DEFAULT=50
+MAX_LOOPS_DEFAULT=20
+MAX_EXCEPTION_LOOPS_DEFAULT=2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -15,6 +16,7 @@ RUN_ROOT_PARENT="$REPO_ROOT/results/phase5/ralph-codex-local"
 
 INSTANCE_FILE=""
 MAX_LOOPS="$MAX_LOOPS_DEFAULT"
+MAX_EXCEPTION_LOOPS="$MAX_EXCEPTION_LOOPS_DEFAULT"
 
 usage() {
   cat <<USAGE
@@ -23,7 +25,9 @@ Usage: scripts/run-swebench-batch.sh [options]
 Options:
   --instance-file <path>  Optional subset input. Supports newline-delimited IDs,
                           JSON array/object, or JSONL records with instance_id.
-  --max-loops <n>         Execute-loop pass budget per instance (default: ${MAX_LOOPS_DEFAULT})
+  --max-loops <n>         Total plan+execute pass budget per instance (default: ${MAX_LOOPS_DEFAULT})
+  --max-exception-loops <n>
+                          Exception-phase retry budget per instance (default: ${MAX_EXCEPTION_LOOPS_DEFAULT})
   -h, --help              Show this help message
 
 Behavior:
@@ -269,6 +273,11 @@ while [[ $# -gt 0 ]]; do
       MAX_LOOPS="$2"
       shift 2
       ;;
+    --max-exception-loops)
+      [[ $# -ge 2 ]] || { error "--max-exception-loops requires a value"; exit 2; }
+      MAX_EXCEPTION_LOOPS="$2"
+      shift 2
+      ;;
     --profile|--codex-profile|--interactive|--claude)
       error "Unsupported option '$1'. This runner delegates to start-swebench.sh with hardcoded Codex local profile."
       exit 2
@@ -287,6 +296,11 @@ done
 
 if ! is_positive_integer "$MAX_LOOPS"; then
   error "--max-loops must be a positive integer"
+  exit 2
+fi
+
+if ! is_positive_integer "$MAX_EXCEPTION_LOOPS"; then
+  error "--max-exception-loops must be a positive integer"
   exit 2
 fi
 
@@ -333,7 +347,8 @@ for instance_id in "${INSTANCE_IDS[@]}"; do
     --instance-id "$instance_id" \
     --output-dir "$instance_output_dir" \
     --manifest-dir "$RUN_ROOT" \
-    --max-loops "$MAX_LOOPS" >>"$BATCH_LOG_PATH" 2>&1
+    --max-loops "$MAX_LOOPS" \
+    --max-exception-loops "$MAX_EXCEPTION_LOOPS" >>"$BATCH_LOG_PATH" 2>&1
   invocation_exit="$?"
   set -e
 

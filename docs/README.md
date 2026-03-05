@@ -11,8 +11,9 @@ Welcome to the SWE-Bench Evaluation project documentation. This index provides q
 
 - **[Overview](implementation/README.md)** - Project architecture, phases, and scripts
 - **[Phase 5 Runner](implementation/phase5-runner.md)** - Implemented workflow contract for `start-swebench.sh` and `run-swebench-batch.sh`, plus live integration findings and current known gaps
+- **[Phase 5 Unresolved Campaign](implementation/phase5-unresolved-campaign.md)** - Campaign scaffolding for rerunning Phase 3 unresolved IDs (target extraction + prediction orchestration + optional same-pass immediate eval mode + sequential eval orchestration for resume/backfill + final summary/classification reporting + container-fix registry/rerun workflow + post-eval triage promotion workflow implemented)
 - **[MCP Docker Exec Bridge](implementation/mcp-docker-exec-bridge.md)** - Phase 2 stdlib MCP server contract for container-routed shell execution, including transport compatibility details from live integration
-- **[Codex Local Bridge](implementation/codex-local-bridge.md)** - Required LiteLLM + vLLM stack for `codex -p local`
+- **[Codex Local Bridge](implementation/codex-local-bridge.md)** - Required LiteLLM + vLLM stack for `codex -p local`, including repo-local `CODEX_HOME` custom base-instructions override (`config/codex-home/prompt.md`)
 - **[Prepare Codex Images](implementation/prepare-codex-images.md)** - Manual utility for pre-injecting codex into SWE-Bench ARM64 images
 - **[ARM64 Support](arm64-support/README.md)** - Complete ARM64 implementation guide
 - **[ARM64 Quick Start](arm64-support/QUICKSTART.md)** - Quick start for ARM64 evaluations
@@ -32,6 +33,7 @@ docs/
 │   ├── codex-local-bridge.md # LiteLLM + vLLM stack for Codex local profile
 │   ├── mcp-docker-exec-bridge.md # Phase 2 MCP docker-exec bridge component
 │   ├── phase5-runner.md   # Phase 5 single-instance and batch runners
+│   ├── phase5-unresolved-campaign.md # Phase 5 unresolved rerun campaign orchestration
 │   └── prepare-codex-images.md  # Manual codex image prep utility
 └── arm64-support/         # ARM64-specific documentation
     ├── README.md          # Full ARM64 implementation guide
@@ -49,10 +51,10 @@ Start with the **[Quick Start](guides/quickstart.md)** guide.
 Read **[Project Status](project-status.md)** first to see what is complete, what is closed, and what has been live-tested versus full-run pending.
 
 ### For Phase 5 Runner Workflow
-Use **[Phase 5 Runner](implementation/phase5-runner.md)** for single-instance and batch prediction contracts, artifact schemas, and failure-code behavior.
+Use **[Phase 5 Runner](implementation/phase5-runner.md)** for single-instance and batch prediction contracts, artifact schemas, failure-code behavior, and detached-launch policy (`nohup` by default, `tmux` fallback in agent-managed environments that reap background jobs).
 
 ### For Codex Local Runtime
-Use **[Codex Local Bridge](implementation/codex-local-bridge.md)** for required LiteLLM + vLLM startup order and `codex -p local` smoke tests.
+Use **[Codex Local Bridge](implementation/codex-local-bridge.md)** for required LiteLLM + vLLM startup order, repo-local Codex instruction override details (`config/codex-home`), and `codex -p local` smoke tests.
 
 ### For ARM64 Users
 See **[ARM64 Quick Start](arm64-support/QUICKSTART.md)** for ARM64-specific setup.

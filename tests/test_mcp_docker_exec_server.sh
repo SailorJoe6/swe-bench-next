@@ -44,6 +44,9 @@ fi
 if [[ -n "${FAKE_DOCKER_STDERR:-}" ]]; then
   printf '%b' "${FAKE_DOCKER_STDERR}" >&2
 fi
+if [[ -n "${FAKE_DOCKER_SLEEP_SECONDS:-}" ]]; then
+  sleep "${FAKE_DOCKER_SLEEP_SECONDS}"
+fi
 
 exit "${FAKE_DOCKER_EXIT_CODE:-0}"
 EOF
@@ -144,6 +147,25 @@ list_resp = recv_message(proc.stdout)
 tools = list_resp["result"]["tools"]
 assert isinstance(tools, list) and len(tools) == 1
 assert tools[0]["name"] == "mcp-docker-exec"
+
+send_message(proc.stdin, {"jsonrpc": "2.0", "id": 21, "method": "resources/list", "params": {}})
+resource_list_resp = recv_message(proc.stdout)
+resources = resource_list_resp["result"]["resources"]
+assert isinstance(resources, list) and len(resources) == 1
+resource_uri = resources[0]["uri"]
+assert resource_uri == "mcp://mcp-docker-exec-server/usage"
+
+send_message(
+    proc.stdin,
+    {"jsonrpc": "2.0", "id": 22, "method": "resources/read", "params": {"uri": resource_uri}},
+)
+resource_read_resp = recv_message(proc.stdout)
+contents = resource_read_resp["result"]["contents"]
+assert isinstance(contents, list) and len(contents) == 1
+assert contents[0]["uri"] == resource_uri
+assert contents[0]["mimeType"] == "text/markdown"
+assert "mcp-docker-exec" in contents[0]["text"]
+assert "docker exec -i -w <workdir> <container> /bin/sh -lc <command>" in contents[0]["text"]
 
 send_message(
     proc.stdin,
@@ -269,6 +291,24 @@ tools = list_resp["result"]["tools"]
 assert isinstance(tools, list) and len(tools) == 1
 assert tools[0]["name"] == "mcp-docker-exec"
 
+send_line(proc.stdin, {"jsonrpc": "2.0", "id": 11, "method": "resources/list", "params": {}})
+resource_list_resp = recv_line(proc.stdout)
+resources = resource_list_resp["result"]["resources"]
+assert isinstance(resources, list) and len(resources) == 1
+resource_uri = resources[0]["uri"]
+assert resource_uri == "mcp://mcp-docker-exec-server/usage"
+
+send_line(
+    proc.stdin,
+    {"jsonrpc": "2.0", "id": 12, "method": "resources/read", "params": {"uri": resource_uri}},
+)
+resource_read_resp = recv_line(proc.stdout)
+contents = resource_read_resp["result"]["contents"]
+assert isinstance(contents, list) and len(contents) == 1
+assert contents[0]["uri"] == resource_uri
+assert contents[0]["mimeType"] == "text/markdown"
+assert "mcp-docker-exec" in contents[0]["text"]
+
 send_line(
     proc.stdin,
     {
@@ -308,8 +348,108 @@ assert logged == expected, logged
 PY
 }
 
+run_case_command_timeout() {
+  local docker_dir
+  docker_dir="$(make_fake_docker_bin)"
+
+  PATH="$docker_dir:$PATH" \
+  FAKE_DOCKER_SLEEP_SECONDS=2 \
+  python3 - "$SERVER_SCRIPT" <<'PY'
+import json
+import subprocess
+import sys
+
+server_script = sys.argv[1]
+
+
+def send_message(pipe, payload):
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+    pipe.write(header + body)
+    pipe.flush()
+
+
+def recv_message(pipe):
+    content_length = None
+    while True:
+        line = pipe.readline()
+        if line == b"":
+            raise RuntimeError("unexpected EOF while reading headers")
+        if line in (b"\r\n", b"\n"):
+            break
+        header = line.decode("utf-8").strip()
+        key, sep, value = header.partition(":")
+        if sep and key.lower() == "content-length":
+            content_length = int(value.strip())
+    if content_length is None:
+        raise RuntimeError("missing Content-Length in response")
+    body = pipe.read(content_length)
+    if len(body) != content_length:
+        raise RuntimeError("incomplete message body")
+    return json.loads(body.decode("utf-8"))
+
+
+proc = subprocess.Popen(
+    [
+        sys.executable,
+        server_script,
+        "--container-name",
+        "runtime-timeout",
+        "--workdir",
+        "/testbed",
+        "--command-timeout-seconds",
+        "1",
+    ],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+
+assert proc.stdin is not None
+assert proc.stdout is not None
+assert proc.stderr is not None
+
+send_message(
+    proc.stdin,
+    {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "test"}},
+    },
+)
+recv_message(proc.stdout)
+send_message(proc.stdin, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+
+send_message(
+    proc.stdin,
+    {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "mcp-docker-exec",
+            "arguments": {"command": "echo will-timeout"},
+        },
+    },
+)
+call_resp = recv_message(proc.stdout)
+payload = call_resp["result"]["structuredContent"]
+
+assert call_resp["result"]["isError"] is False
+assert payload["exit_code"] == 124
+assert "timed out after 1s" in payload["stderr"]
+
+proc.stdin.close()
+return_code = proc.wait(timeout=5)
+stderr_text = proc.stderr.read().decode("utf-8")
+assert return_code == 0, stderr_text
+PY
+}
+
 run_case_missing_bindings
 run_case_stdio_protocol_and_passthrough
 run_case_line_delimited_protocol_and_passthrough
+run_case_command_timeout
 
 echo "PASS: mcp docker exec server"

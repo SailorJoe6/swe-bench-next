@@ -26,13 +26,13 @@ make_fake_codex_bin() {
 set -euo pipefail
 
 phase="${SWE_BENCH_RUNTIME_PHASE:-unknown}"
-plans_dir="${SWE_BENCH_PLANS_DIR:-}"
-spec_path="${SWE_BENCH_SPEC_PATH:-$plans_dir/SPECIFICATION.md}"
-plan_path="${SWE_BENCH_PLAN_PATH:-$plans_dir/EXECUTION_PLAN.md}"
-archive_dir="${SWE_BENCH_ARCHIVE_DIR:-$plans_dir/archive}"
-blocked_dir="${SWE_BENCH_BLOCKED_DIR:-$plans_dir/blocked}"
-patch_path="${SWE_BENCH_PATCH_PATH:-}"
-output_dir="${SWE_BENCH_OUTPUT_DIR:-}"
+plans_dir="${SWE_BENCH_HOST_PLANS_DIR:-${SWE_BENCH_PLANS_DIR:-}}"
+spec_path="${SWE_BENCH_HOST_SPEC_PATH:-${SWE_BENCH_SPEC_PATH:-$plans_dir/SPECIFICATION.md}}"
+plan_path="${SWE_BENCH_HOST_PLAN_PATH:-${SWE_BENCH_PLAN_PATH:-$plans_dir/EXECUTION_PLAN.md}}"
+archive_dir="${SWE_BENCH_HOST_ARCHIVE_DIR:-${SWE_BENCH_ARCHIVE_DIR:-$plans_dir/archive}}"
+blocked_dir="${SWE_BENCH_HOST_BLOCKED_DIR:-${SWE_BENCH_BLOCKED_DIR:-$plans_dir/blocked}}"
+patch_path="${SWE_BENCH_HOST_PATCH_PATH:-${SWE_BENCH_PATCH_PATH:-}}"
+output_dir="${SWE_BENCH_HOST_OUTPUT_DIR:-${SWE_BENCH_OUTPUT_DIR:-}}"
 scenario="${FAKE_CODEX_SCENARIO:-no_op}"
 last_arg=""
 
@@ -65,7 +65,7 @@ if [[ -n "$output_dir" ]]; then
   } > "$output_dir/logs/fake_args_${phase}.txt"
 fi
 
-if [[ "$phase" == "plan" && -n "$plan_path" && ! -f "$plan_path" ]]; then
+if [[ "$phase" == "plan" && "$scenario" != "plan_no_output" && -n "$plan_path" && ! -f "$plan_path" ]]; then
   mkdir -p "$(dirname "$plan_path")"
   cat > "$plan_path" <<'PLAN'
 # Execution Plan (fake codex)
@@ -83,13 +83,18 @@ if [[ "$phase" == "execute" && -n "$output_dir" ]]; then
   printf '%s\n' "$count" > "$count_file"
 fi
 
+should_fail_phase=0
 if [[ -n "${FAKE_CODEX_FAIL_PHASE:-}" && "$phase" == "$FAKE_CODEX_FAIL_PHASE" ]]; then
+  should_fail_phase=1
+fi
+
+if [[ "$should_fail_phase" == "1" && "${FAKE_CODEX_FAIL_AFTER_SESSION:-0}" != "1" ]]; then
   echo "fake codex forced failure for phase: $phase" >&2
   exit "${FAKE_CODEX_FAIL_EXIT_CODE:-7}"
 fi
 
 case "$scenario" in
-  no_op|stay_in_root)
+  no_op|stay_in_root|plan_no_output)
     ;;
   blocked_after_first_execute)
     if [[ "$phase" == "execute" && "${SWE_BENCH_EXECUTE_PASS:-0}" == "1" ]]; then
@@ -127,6 +132,12 @@ PATCH
 esac
 
 echo "session id: fake-${phase}-${SWE_BENCH_EXECUTE_PASS:-0} trailing-token" >&2
+
+if [[ "$should_fail_phase" == "1" && "${FAKE_CODEX_FAIL_AFTER_SESSION:-0}" == "1" ]]; then
+  echo "fake codex forced failure for phase: $phase" >&2
+  exit "${FAKE_CODEX_FAIL_EXIT_CODE:-7}"
+fi
+
 exit 0
 EOF
   chmod +x "$tmpdir/codex"
@@ -275,8 +286,10 @@ make_isolated_runner_root() {
   local tmpdir
   tmpdir="$(mktemp -d)"
   mkdir -p "$tmpdir/scripts"
+  mkdir -p "$tmpdir/config/codex-home"
   cp "$SCRIPT" "$tmpdir/scripts/start-swebench.sh"
   cp "$REPO_ROOT/scripts/mcp-docker-exec-server.py" "$tmpdir/scripts/mcp-docker-exec-server.py"
+  cp "$REPO_ROOT/config/codex-home/config.toml" "$tmpdir/config/codex-home/config.toml"
   chmod +x "$tmpdir/scripts/mcp-docker-exec-server.py"
   chmod +x "$tmpdir/scripts/start-swebench.sh"
   echo "$tmpdir"
@@ -348,7 +361,7 @@ run_case_default_manifest_and_artifacts() {
 
   assert_eq "20" "$status" "incomplete classification should return 20"
 
-  [[ -f "$tmpdir/out/repo__issue-1.patch" ]] || fail "patch file missing"
+  [[ ! -e "$tmpdir/out/repo__issue-1.patch" ]] || fail "patch file should not exist for incomplete run"
   [[ -f "$tmpdir/out/repo__issue-1.pred" ]] || fail "pred file missing"
   [[ -f "$tmpdir/out/repo__issue-1.status.json" ]] || fail "status file missing"
   [[ -f "$tmpdir/out/run_manifest.json" ]] || fail "manifest file missing at default manifest dir"
@@ -368,6 +381,7 @@ pred = json.loads((out / "repo__issue-1.pred").read_text(encoding="utf-8"))
 assert pred["model_name_or_path"] == "qwen3-coder-next-FP8,codex,ralph"
 assert pred["instance_id"] == "repo__issue-1"
 assert pred["model_patch"] == ""
+assert not (out / "repo__issue-1.patch").exists()
 
 status = json.loads((out / "repo__issue-1.status.json").read_text(encoding="utf-8"))
 assert status["instance_id"] == "repo__issue-1"
@@ -439,6 +453,7 @@ assert "ralph/prompts/handoff.md" in status["error_log"]
 
 pred = json.loads((out / "repo__issue-2.pred").read_text(encoding="utf-8"))
 assert pred["model_patch"] == ""
+assert not (out / "repo__issue-2.patch").exists()
 
 manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
 inst = manifest["instances"]["repo__issue-2"]
@@ -592,6 +607,7 @@ assert "sweb.eval.arm64.repo__missing-image:latest" in status["failure_reason_de
 
 pred = json.loads((out / "repo__missing-image.pred").read_text(encoding="utf-8"))
 assert pred["model_patch"] == ""
+assert not (out / "repo__missing-image.patch").exists()
 
 manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
 inst = manifest["instances"]["repo__missing-image"]
@@ -731,13 +747,14 @@ run_case_runtime_container_name_and_collision_cleanup() {
 
   assert_eq "20" "$status" "container naming case should run and end incomplete at loop limit"
 
-  python3 - "$docker_log" "$instance_id" <<'PY'
+  python3 - "$docker_log" "$instance_id" "$tmpdir" <<'PY'
 import pathlib
 import re
 import sys
 
 log_path = pathlib.Path(sys.argv[1])
 instance_id = sys.argv[2]
+root = pathlib.Path(sys.argv[3])
 prefix = "swebench-runtime-"
 max_len = 63
 
@@ -769,6 +786,9 @@ assert rm_index < create_indices[0], "stale cleanup rm -f must occur before dock
 
 assert len(expected_name) <= max_len, f"container name too long: {expected_name}"
 assert expected_name == expected_name.lower()
+
+expected_mount = f"-v {root / 'out'}:{root / 'out'}"
+assert expected_mount in lines[create_indices[0]], lines[create_indices[0]]
 PY
 }
 
@@ -809,6 +829,9 @@ assert status["failure_reason_detail"] == ""
 pred = json.loads((out / "repo__success-case.pred").read_text(encoding="utf-8"))
 assert pred["model_patch"] != ""
 assert "diff --git" in pred["model_patch"]
+patch_text = (out / "repo__success-case.patch").read_text(encoding="utf-8")
+assert patch_text != ""
+assert patch_text.rstrip("\n") == pred["model_patch"]
 
 manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
 inst = manifest["instances"]["repo__success-case"]
@@ -859,6 +882,7 @@ assert "left root plans directory" in status["failure_reason_detail"]
 
 pred = json.loads((out / "repo__mismatch-case.pred").read_text(encoding="utf-8"))
 assert pred["model_patch"] == ""
+assert not (out / "repo__mismatch-case.patch").exists()
 
 manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
 inst = manifest["instances"]["repo__mismatch-case"]
@@ -903,9 +927,59 @@ status = json.loads((out / "repo__max-loops-case.status.json").read_text(encodin
 assert status["status"] == "incomplete"
 assert status["failure_reason_code"] == "incomplete"
 assert "execute budget" in status["failure_reason_detail"]
+assert not (out / "repo__max-loops-case.patch").exists()
 
 execute_count = (out / "logs" / "fake_codex_execute_count.txt").read_text(encoding="utf-8").strip()
 assert execute_count == "3"
+PY
+}
+
+run_case_plan_retries_until_budget() {
+  local tmpdir
+  local codex_bin
+  local docker_bin
+  local isolated_script
+  local instance_fixture
+  tmpdir="$(make_isolated_runner_root)"
+  codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "repo__plan-retry-case" "Do not produce a plan document in this fake scenario."
+
+  set +e
+  PATH="$docker_bin:$codex_bin:$PATH" \
+  FAKE_DOCKER_IMAGE_EXISTS=1 \
+  FAKE_DOCKER_CONTAINER_HAS_CODEX=1 \
+  FAKE_CODEX_SCENARIO=plan_no_output \
+  SWE_BENCH_INSTANCES_FILE="$instance_fixture" \
+  "$isolated_script" --instance-id repo__plan-retry-case --output-dir "$tmpdir/out" --max-loops 2 > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "20" "$status" "plan retry budget exhaustion should report incomplete status"
+
+  python3 - "$tmpdir" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+out = root / "out"
+
+status = json.loads((out / "repo__plan-retry-case.status.json").read_text(encoding="utf-8"))
+assert status["status"] == "incomplete"
+assert status["failure_reason_code"] == "incomplete"
+assert "plan budget" in status["failure_reason_detail"]
+assert not (out / "repo__plan-retry-case.patch").exists()
+
+plan_path = out / "plans" / "EXECUTION_PLAN.md"
+assert not plan_path.exists(), plan_path
+
+command_log = (out / "logs" / "codex_command.txt").read_text(encoding="utf-8")
+assert command_log.count("phase=plan ") == 2, command_log
+assert "phase=execute " not in command_log, command_log
 PY
 }
 
@@ -946,6 +1020,7 @@ assert "repo__missing-issue" in status["error_log"]
 
 pred = json.loads((out / "repo__missing-issue.pred").read_text(encoding="utf-8"))
 assert pred["model_patch"] == ""
+assert not (out / "repo__missing-issue.patch").exists()
 PY
 }
 
@@ -970,8 +1045,7 @@ run_case_mcp_phase_failure_diagnostics() {
   local status=$?
   set -e
 
-  assert_eq "1" "$status" "execute MCP-path failure should return exit 1"
-  rg -F -q -- "Execute prompt failed" /tmp/start-swebench-test.err || fail "execute-phase failure text not found"
+  assert_eq "20" "$status" "execute MCP-path failure should continue and end incomplete at loop budget"
 
   python3 - "$tmpdir" "$instance_id" <<'PY'
 import json
@@ -984,14 +1058,12 @@ instance_id = sys.argv[2]
 out = root / "out"
 
 status = json.loads((out / f"{instance_id}.status.json").read_text(encoding="utf-8"))
-assert status["status"] == "failed"
-assert status["failure_reason_code"] == "runtime_error"
+assert status["status"] == "incomplete"
+assert status["failure_reason_code"] == "incomplete"
+assert not (out / f"{instance_id}.patch").exists()
 
 detail = status["failure_reason_detail"]
-assert "phase=execute" in detail
-assert "pass=1" in detail
-assert "workdir=/testbed" in detail
-assert "mcp_server=swebench_docker_exec" in detail
+assert "execute budget" in detail
 
 prefix = "swebench-runtime-"
 max_len = 63
@@ -1004,17 +1076,85 @@ sanitized = sanitized[:suffix_max].strip("-")
 if not sanitized:
     sanitized = "instance"
 expected_runtime_name = prefix + sanitized
-assert f"runtime_container={expected_runtime_name}" in detail, detail
 
 error_log = status["error_log"]
-assert "[codex_execute.log tail]" in error_log
+assert "Execute prompt exited non-zero" in error_log
+assert f"runtime_container={expected_runtime_name}" in error_log
+assert "pass=1" in error_log
+assert "workdir=/testbed" in error_log
+assert "mcp_server=swebench_docker_exec" in error_log
+assert "[codex_run.log tail]" in error_log
 assert "fake codex forced failure for phase: execute" in error_log
 
 manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
 inst = manifest["instances"][instance_id]
-assert inst["status"] == "failed"
-assert inst["failure_reason_code"] == "runtime_error"
-assert "phase=execute" in inst["failure_reason_detail"]
+assert inst["status"] == "incomplete"
+assert inst["failure_reason_code"] == "incomplete"
+assert "execute budget" in inst["failure_reason_detail"]
+assert "Execute prompt exited non-zero" in inst["error_log"]
+PY
+}
+
+run_case_execute_failure_with_session_attempts_handoff() {
+  local tmpdir
+  local codex_bin
+  local docker_bin
+  local isolated_script
+  local instance_fixture
+  local instance_id
+  tmpdir="$(make_isolated_runner_root)"
+  codex_bin="$(make_fake_codex_bin)"
+  docker_bin="$(make_fake_docker_bin)"
+  isolated_script="$tmpdir/scripts/start-swebench.sh"
+  instance_fixture="$tmpdir/instances.jsonl"
+  instance_id="repo__execute-fail-with-session"
+  write_required_prompts "$tmpdir"
+  write_instance_fixture "$instance_fixture" "$instance_id" "Ensure execute failures with a session id still run handoff."
+
+  set +e
+  PATH="$docker_bin:$codex_bin:$PATH" \
+  FAKE_DOCKER_IMAGE_EXISTS=1 \
+  FAKE_CODEX_SCENARIO=stay_in_root \
+  FAKE_CODEX_FAIL_PHASE=execute \
+  FAKE_CODEX_FAIL_AFTER_SESSION=1 \
+  SWE_BENCH_INSTANCES_FILE="$instance_fixture" \
+  "$isolated_script" --instance-id "$instance_id" --output-dir "$tmpdir/out" --max-loops 1 > /tmp/start-swebench-test.out 2> /tmp/start-swebench-test.err
+  local status=$?
+  set -e
+
+  assert_eq "20" "$status" "execute failure with session id should still handoff and end incomplete at loop budget"
+
+  python3 - "$tmpdir" "$instance_id" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+instance_id = sys.argv[2]
+out = root / "out"
+
+status = json.loads((out / f"{instance_id}.status.json").read_text(encoding="utf-8"))
+assert status["status"] == "incomplete"
+assert status["failure_reason_code"] == "incomplete"
+assert "execute budget" in status["failure_reason_detail"]
+assert not (out / f"{instance_id}.patch").exists()
+
+command_log = (out / "logs" / "codex_command.txt").read_text(encoding="utf-8")
+assert "phase=execute pass=1" in command_log
+assert "phase=handoff pass=1" in command_log
+
+handoff_args = (out / "logs" / "fake_args_handoff.txt").read_text(encoding="utf-8").splitlines()
+assert "resume" in handoff_args
+assert "fake-execute-1" in handoff_args
+
+run_log = (out / "logs" / "codex_run.log").read_text(encoding="utf-8")
+assert "Loop #1 - Plan Mode" in run_log
+assert "Loop #1 - Execute Mode" in run_log
+assert "Handoff" in run_log
+assert "fake codex forced failure for phase: execute" in run_log
+assert not (out / "logs" / "codex_plan.log").exists()
+assert not (out / "logs" / "codex_execute.log").exists()
+assert not (out / "logs" / "codex_handoff.log").exists()
 PY
 }
 
@@ -1144,8 +1284,10 @@ run_case_runtime_container_name_and_collision_cleanup
 run_case_success_archive_classification
 run_case_mismatch_after_execute_fails
 run_case_max_loops_budget
+run_case_plan_retries_until_budget
 run_case_missing_instance_metadata
 run_case_mcp_phase_failure_diagnostics
+run_case_execute_failure_with_session_attempts_handoff
 run_case_prefers_repo_venv_python_for_metadata
 run_case_multilingual_dataset_mapping_matches_phase3
 

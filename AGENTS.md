@@ -1,40 +1,15 @@
 # Agent Instructions
 
-## Launching the Plane (Session Start)
+## Work scope
+This project is mostly helper scripts that configure and run SWE-Bench tests in a few different configurations.  Be careful not to overcomplicate things.  When the user asks you to endcode some simple task in a script, write a SIMPLE script.  Add check and verifications where it makes sense, but don't overcomplicate.  
 
-Study the following files in order to understand the project:
+Some examples from past overcomplications:
+- The user asked the Agent to copy the functionality of another script but create a "watered down" version with only a few of the features of the full powered script.  The Agent re-wrote the script from scratch adding a bunch of unrequested enhancements.  WRONG!
+- The original script output everything to one single log.  The new script opened up 5 different log files for different steps in the process.  WRONG!
+- The user asked the Agent to fix that issue by having the new script output to only one log file.  The Agent added an overcomplicated log buffering mechanism.  WRONG! 
 
-1. **[README.md](README.md)** - Project overview, features, and configuration
-3. **[docs/README.md](docs/README.md)** - Documentation index and navigation
+Don't overcomplicate simple tasks! 
 
-## Landing the Plane (Session Completion)
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-
-
-<!-- BEGIN BEADS INTEGRATION -->
 ## Issue Tracking with bd (beads)
 
 **IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.

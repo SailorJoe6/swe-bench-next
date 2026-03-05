@@ -10,7 +10,7 @@ This guide covers the quick and dirty about how we set up and run predictions an
 
 ## Phase 5 Runner Note
 
-If you are using the current Ralph + Codex local workflow (`scripts/start-swebench.sh` and `scripts/run-swebench-batch.sh`), use **[docs/implementation/phase5-runner.md](../implementation/phase5-runner.md)** as the source of truth for CLI usage, output contracts, and failure semantics.
+If you are using the current Ralph + Codex local workflow (`scripts/start-swebench.sh` and `scripts/run-swebench-batch.sh`), use **[docs/implementation/phase5-runner.md](../implementation/phase5-runner.md)** as the source of truth for CLI usage, output contracts, failure semantics, and detached launch policy (`nohup` by default; `tmux` fallback when agent-managed environments reap background jobs).
 
 ## Prerequisites
 
@@ -99,8 +99,23 @@ Codex local profile uses Responses API wire format. We run LiteLLM on `:8000` to
 ./scripts/launch-litellm.sh --health
 
 # Mandatory Codex routing smoke test before Phase 5 runs
+CODEX_HOME="$(pwd)/config/codex-home" \
 codex exec -p local --dangerously-bypass-approvals-and-sandbox \
   "Respond with exactly: CODEX_LOCAL_BRIDGE_OK"
+```
+
+The runner's local Codex profile is intentionally customized in `config/codex-home/`:
+
+- `config.toml` sets `model_instructions_file` to the repo-local `prompt.md`.
+- `config.toml` sets `model_catalog_json` to `qwen3-model-catalog.json` so Codex can use explicit local model metadata (including context window).
+- `prompt.md` is the authoritative base instructions copy for this project and enforces MCP-only command/edit/patch operations via `swebench_docker_exec.mcp-docker-exec({"command":"..."})` (no `apply_patch`).
+
+Quick verify:
+
+```bash
+rg -n "model_instructions_file|model_catalog_json" config/codex-home/config.toml
+jq '.models[] | {slug, context_window, shell_type, supports_parallel_tool_calls, input_modalities}' config/codex-home/qwen3-model-catalog.json
+sed -n '1,12p' config/codex-home/prompt.md
 ```
 
 ### 3. Tag ARM64 Docker Images
@@ -211,6 +226,12 @@ tail -f eval-batch.log
 - Confirm LiteLLM has models: `curl -sS http://127.0.0.1:8000/v1/models | jq .`
 - Confirm Codex local smoke test: `codex exec -p local --dangerously-bypass-approvals-and-sandbox "Respond with exactly: CODEX_LOCAL_BRIDGE_OK"`
 - Tail LiteLLM logs for traffic: `docker logs --tail 80 litellm-proxy`
+
+**Codex phase appears stuck on repeated `unsupported call: apply_patch`**:
+- Confirm the repo-local overrides exist: `rg -n "model_instructions_file|model_catalog_json" config/codex-home/config.toml`
+- Confirm model catalog content: `jq '.models[] | {slug, context_window, shell_type}' config/codex-home/qwen3-model-catalog.json`
+- Confirm MCP-only line is present in `config/codex-home/prompt.md`
+- Stop and restart the active run so new Codex sessions load updated base instructions
 
 ### SWE-agent Issues
 

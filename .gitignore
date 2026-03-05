@@ -29,3 +29,7 @@ results/
 logs/
 missing_instances.txt
 tmp/
+config/codex-home/sessions/
+config/codex-home/state*
+config/codex-home/shell_snapshots/
+config/codex-home/skills/.system/

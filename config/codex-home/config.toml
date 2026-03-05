@@ -1,0 +1,11 @@
+model_catalog_json = "/home/sailorjoe6/Code/swebench-eval-next/config/codex-home/qwen3-model-catalog.json"
+
+[model_providers.dgx_spark]
+name = "DGX Spark"
+base_url = "http://100.106.229.10:8000/v1"
+wire_api = "responses"
+
+[profiles.local]
+model = "Qwen3-Coder-Next"
+model_provider = "dgx_spark"
+model_instructions_file = "/home/sailorjoe6/Code/swebench-eval-next/config/codex-home/prompt.md"
